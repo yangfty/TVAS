@@ -18,9 +18,9 @@ def _read_version() -> str:
     version_file = os.path.join(base, "VERSION")
     try:
         with open(version_file, "r", encoding="utf-8") as f:
-            return f.read().strip() or "1.0.0"
+            return f.read().strip() or "0.0.2"
     except Exception:
-        return "1.0.0"
+        return "0.0.2"
 
 
 __version__ = _read_version()
