@@ -1,0 +1,56 @@
+# Project data
+.workbuddy/
+
+# Reference files (not part of the app)
+1、*
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.so
+*.egg-info/
+dist/
+build/
+*.egg
+.eggs/
+
+# PyInstaller
+*.spec.bak
+
+# Virtual environment
+venv/
+env/
+.venv/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Conda
+*.tar.bz2
+
+# Build artifacts
+*.deb
+*.rpm
+*.AppImage
+
+# Config (local)
+rnaseq_config.json
+
+# Logs
+*.log
+*.err
+*.out
+
+# Temporary files
+*.tmp
+*.temp

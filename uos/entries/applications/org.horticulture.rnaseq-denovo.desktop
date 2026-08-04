@@ -1,0 +1,15 @@
+[Desktop Entry]
+Name=转录组DeNovo组装
+Name[zh_CN]=转录组DeNovo组装
+GenericName=RNA-seq De Novo Assembly
+GenericName[zh_CN]=转录组DeNovo组装
+Comment=转录组测序数据 De Novo 组装分析工具
+Comment[zh_CN]=为没有参考基因组的物种提供一站式转录组组装方案
+Exec=/opt/apps/org.horticulture.rnaseq-denovo/files/bin/rnaseq-denovo
+Icon=org.horticulture.rnaseq-denovo
+Terminal=false
+Type=Application
+Categories=Science;Biology;Education;
+StartupNotify=true
+Encoding=UTF-8
+X-Deepin-Vendor=rnaseq-tools

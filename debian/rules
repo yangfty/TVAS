@@ -1,0 +1,54 @@
+#!/usr/bin/make -f
+# Debian 打包规则 - UOS 适配
+
+export DH_VERBOSE=1
+
+# 应用标识 (符合 UOS 商店规范)
+APPID ?= org.horticulture.rnaseq-denovo
+
+# 安装前缀 (UOS 商店要求 /opt/apps/${appid})
+PREFIX = /opt/apps/$(APPID)
+
+%:
+	dh $@
+
+override_dh_auto_build:
+	# 由 build.sh 完成 PyInstaller 打包
+	# 这里确保 dist/ 目录存在
+	mkdir -p dist
+	@if [ ! -f dist/转录组DeNovo组装 ]; then \
+		echo "请先运行 ./build.sh 生成可执行文件"; \
+		exit 1; \
+	fi
+
+override_dh_auto_install:
+	# 按 UOS 规范安装到 /opt/apps/${appid}/
+	install -d debian/rnaseq-denovo$(PREFIX)/files/bin
+	install -d debian/rnaseq-denovo$(PREFIX)/entries/applications
+	install -d debian/rnaseq-denovo$(PREFIX)/entries/icons/hicolor/128x128/apps
+
+	# 可执行文件
+	install -m 755 dist/转录组DeNovo组装 debian/rnaseq-denovo$(PREFIX)/files/bin/rnaseq-denovo
+
+	# 图标
+	install -m 644 rnaseq_app/resources/icon.png debian/rnaseq-denovo$(PREFIX)/entries/icons/hicolor/128x128/apps/$(APPID).png
+
+	# 桌面启动器
+	install -m 644 uos/entries/applications/$(APPID).desktop debian/rnaseq-denovo$(PREFIX)/entries/applications/
+
+	# UOS info 文件
+	install -d debian/rnaseq-denovo$(PREFIX)
+	install -m 644 uos/info debian/rnaseq-denovo$(PREFIX)/info
+
+	# 辅助脚本
+	install -d debian/rnaseq-denovo$(PREFIX)/files/scripts
+	install -m 644 scripts/*.py debian/rnaseq-denovo$(PREFIX)/files/scripts/
+
+override_dh_strip:
+	# 跳过二进制 strip (PyInstaller 已处理)
+
+override_dh_shlibdeps:
+	# 跳过共享库依赖检测
+
+override_dh_gencontrol:
+	dh_gencontrol -- -Vappid=$(APPID)

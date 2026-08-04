@@ -1,0 +1,20 @@
+{
+  "appid": "org.horticulture.rnaseq-denovo",
+  "name": "转录组DeNovo组装",
+  "version": "1.0.0.1",
+  "arch": ["amd64"],
+  "permissions": {
+    "autostart": false,
+    "notification": false,
+    "trayicon": false,
+    "clipboard": false,
+    "account": false,
+    "bluetooth": false,
+    "camera": false,
+    "audio_record": false,
+    "installed_apps": false
+  },
+  "support-plugins": [],
+  "plugins": [],
+  "description": "转录组测序数据 De Novo 组装分析工具。为没有参考基因组的物种提供一站式转录组组装方案，包含 FastQC 质控、Fastp 过滤、Rcorrector 纠错、Trinity 组装、CD-HIT 去冗余、TransDecoder CDS 预测等完整 11 步分析流程。"
+}

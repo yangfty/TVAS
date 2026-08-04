@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#2c3e50"/>
+      <stop offset="100%" stop-color="#3498db"/>
+    </linearGradient>
+    <linearGradient id="helix1" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#e74c3c"/>
+      <stop offset="100%" stop-color="#f39c12"/>
+    </linearGradient>
+    <linearGradient id="helix2" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#27ae60"/>
+      <stop offset="100%" stop-color="#2ecc71"/>
+    </linearGradient>
+  </defs>
+
+  <!-- 背景圆角矩形 -->
+  <rect x="4" y="4" width="120" height="120" rx="24" fill="url(#bg)"/>
+
+  <!-- DNA 双螺旋 - 左链 -->
+  <path d="M 34 28 Q 54 48 34 64 Q 54 80 34 100"
+        fill="none" stroke="url(#helix1)" stroke-width="4" stroke-linecap="round"/>
+  <!-- DNA 双螺旋 - 右链 -->
+  <path d="M 94 28 Q 74 48 94 64 Q 74 80 94 100"
+        fill="none" stroke="url(#helix2)" stroke-width="4" stroke-linecap="round"/>
+
+  <!-- 碱基对横线 -->
+  <line x1="41" y1="42" x2="87" y2="42" stroke="#ecf0f1" stroke-width="2.5" opacity="0.9"/>
+  <line x1="41" y1="56" x2="87" y2="56" stroke="#ecf0f1" stroke-width="2.5" opacity="0.7"/>
+  <line x1="41" y1="64" x2="87" y2="64" stroke="#ecf0f1" stroke-width="2.5" opacity="0.9"/>
+  <line x1="41" y1="78" x2="87" y2="78" stroke="#ecf0f1" stroke-width="2.5" opacity="0.7"/>
+  <line x1="41" y1="92" x2="87" y2="92" stroke="#ecf0f1" stroke-width="2.5" opacity="0.9"/>
+
+  <!-- RNA 序列标记（下方波浪线） -->
+  <path d="M 30 105 Q 36 98 42 105 Q 48 112 54 105 Q 60 98 66 105 Q 72 112 78 105 Q 84 98 90 105 Q 96 112 102 105"
+        fill="none" stroke="#ecf0f1" stroke-width="1.8" stroke-linecap="round" opacity="0.6"/>
+</svg>
