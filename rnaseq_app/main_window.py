@@ -33,7 +33,10 @@ from PyQt5.QtCore import Qt, QTimer, pyqtSlot
 from PyQt5.QtGui import QFont, QColor, QTextCursor, QIcon, QPalette
 
 from .config import ConfigManager
-from .env_manager import CondaEnvManager, PACKAGES
+from .env_manager import (
+    CondaEnvManager, PACKAGES,
+    get_app_data_dir, get_local_conda_dir,
+)
 from .steps import PIPELINE_STEPS, StepStatus, AnalysisContext, SampleInfo
 from .pipeline import AnalysisWorker
 from . import __version__
@@ -307,17 +310,26 @@ class EnvSetupPage(QWidget):
     def _detect_conda(self):
         env = self.get_env_manager()
         ok, info = env.is_conda_installed()
+
         if ok:
             self.conda_status_label.setText(f"✓ {info}")
             self.conda_status_label.setStyleSheet(f"color: {COLORS['success']}; font-weight: bold;")
             self.create_env_btn.setEnabled(True)
             self.conda_path_edit.setText(env.conda_exe)
-            # 检测环境是否已存在
             if env.env_exists():
                 self.conda_status_label.setText(f"✓ {info}  |  环境 '{env.env_name}' 已存在")
                 self.create_env_btn.setText("重建环境")
                 self.install_btn.setEnabled(True)
                 self.verify_btn.setEnabled(True)
+        elif info == "NEED_INSTALL":
+            # 需要自动部署本地 Conda
+            self.conda_path_edit.setText(os.path.join(get_local_conda_dir(), "bin", "conda"))
+            self.conda_status_label.setText("未找到 Conda — 点击下方按钮自动部署（不影响系统）")
+            self.conda_status_label.setStyleSheet(f"color: {COLORS['warning']}; font-weight: bold;")
+            self.create_env_btn.setText("自动部署 Conda")
+            self.create_env_btn.setEnabled(True)
+            self.install_btn.setEnabled(False)
+            self.verify_btn.setEnabled(False)
         else:
             self.conda_status_label.setText(f"✗ {info}")
             self.conda_status_label.setStyleSheet(f"color: {COLORS['error']};")
@@ -325,7 +337,31 @@ class EnvSetupPage(QWidget):
     def _create_env(self):
         env = self.get_env_manager()
         self.create_env_btn.setEnabled(False)
-        self.conda_status_label.setText("正在创建环境...")
+
+        # 如果 conda 不可用，先自动部署
+        ok, info = env.is_conda_installed()
+        if not ok:
+            self.conda_status_label.setText("正在下载 Miniconda（约100MB，仅首次需要）...")
+            self.conda_status_label.setStyleSheet(f"color: {COLORS['running']}; font-weight: bold;")
+            QApplication.processEvents()
+
+            def progress(msg):
+                self.conda_status_label.setText(msg)
+                QApplication.processEvents()
+
+            ok, msg = env.ensure_conda_ready(progress)
+            if not ok:
+                self.conda_status_label.setText(f"✗ Conda 部署失败: {msg[:100]}")
+                self.conda_status_label.setStyleSheet(f"color: {COLORS['error']};")
+                self.create_env_btn.setEnabled(True)
+                return
+            self.conda_path_edit.setText(env.conda_exe)
+            self.conda_status_label.setText(f"✓ 本地 Conda 就绪 ({get_local_conda_dir()})")
+            self.conda_status_label.setStyleSheet(f"color: {COLORS['success']}; font-weight: bold;")
+            QApplication.processEvents()
+
+        # 创建分析环境
+        self.conda_status_label.setText("正在创建分析环境...")
         self.conda_status_label.setStyleSheet(f"color: {COLORS['running']};")
         QApplication.processEvents()
 
