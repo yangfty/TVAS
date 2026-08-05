@@ -3,9 +3,9 @@ name: Build and Release
 on:
   push:
     tags:
-      - 'v*'           # 推送 v* 标签时触发发布
+      - 'v*'
   pull_request:
-    branches: [ main ]  # PR 时仅构建测试
+    branches: [ main ]
 
 jobs:
   build:
@@ -33,13 +33,16 @@ jobs:
         run: |
           ./build.sh --deb
 
+      - name: List built files
+        run: ls -la dist/
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: TVAS-${{ github.ref_name }}
+          name: tvas-build
           path: |
             dist/转录组DeNovo组装
-            dist/TVAS_V*.deb
+            dist/TVAS_*.deb
 
   release:
     needs: build
@@ -51,13 +54,16 @@ jobs:
       - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
-          name: TVAS-${{ github.ref_name }}
+          name: tvas-build
+
+      - name: Verify files
+        run: ls -la
 
       - name: Create Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
-          name: Release ${{ github.ref_name }}
+          name: TVAS ${{ github.ref_name }}
           generate_release_notes: true
           files: |
             转录组DeNovo组装
-            TVAS_V*.deb
+            TVAS_*.deb
