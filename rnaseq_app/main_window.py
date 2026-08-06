@@ -474,6 +474,61 @@ class EnvSetupPage(QWidget):
         self.pkg_table.itemDoubleClicked.connect(self._retry_package)
 
         layout.addWidget(group2)
+
+        # ---- 高级设置 ----
+        group3 = QGroupBox("高级设置")
+        group3.setStyleSheet(self._group_style())
+        g3_layout = QVBoxLayout(group3)
+
+        # 自定义安装
+        custom_row = QHBoxLayout()
+        custom_label = QLabel("自定义安装:")
+        custom_label.setStyleSheet("color: #555;")
+        custom_row.addWidget(custom_label)
+        self.custom_pkg_edit = QLineEdit()
+        self.custom_pkg_edit.setPlaceholderText("输入软件包名，如 salmon / hisat2=2.2.1 / bwa-mem2")
+        self.custom_pkg_edit.returnPressed.connect(self._install_custom)
+        custom_row.addWidget(self.custom_pkg_edit, 1)
+        self.custom_install_btn = QPushButton("安装")
+        self.custom_install_btn.clicked.connect(self._install_custom)
+        self.custom_install_btn.setEnabled(False)
+        custom_row.addWidget(self.custom_install_btn)
+        g3_layout.addLayout(custom_row)
+
+        # 日志区
+        log_row = QHBoxLayout()
+        log_label = QLabel("conda 命令输出:")
+        log_label.setStyleSheet("color: #555;")
+        log_row.addWidget(log_label)
+        log_row.addStretch()
+        self.view_pkg_log_btn = QPushButton("查看选中包日志")
+        self.view_pkg_log_btn.clicked.connect(self._view_pkg_log)
+        log_row.addWidget(self.view_pkg_log_btn)
+        self.view_last_log_btn = QPushButton("查看最近命令输出")
+        self.view_last_log_btn.clicked.connect(self._view_last_log)
+        log_row.addWidget(self.view_last_log_btn)
+        g3_layout.addLayout(log_row)
+
+        self.adv_log_view = QPlainTextEdit()
+        self.adv_log_view.setReadOnly(True)
+        self.adv_log_view.setMaximumHeight(160)
+        self.adv_log_view.setPlaceholderText(
+            "安装失败时，这里显示 conda 的完整输出，帮助定位问题。\n"
+            "提示：选中表格中的软件包，点「查看选中包日志」看该包安装记录。"
+        )
+        self.adv_log_view.setStyleSheet("""
+            QPlainTextEdit {
+                background-color: #1e1e1e;
+                color: #d4d4d4;
+                font-family: "Consolas", "DejaVu Sans Mono", monospace;
+                font-size: 11px;
+                border: 1px solid #333;
+                border-radius: 4px;
+            }
+        """)
+        g3_layout.addWidget(self.adv_log_view)
+
+        layout.addWidget(group3)
         layout.addStretch()
 
     def _group_style(self):
@@ -524,6 +579,7 @@ class EnvSetupPage(QWidget):
                 self.install_btn.setEnabled(True)
                 self.retry_btn.setEnabled(True)
                 self.verify_btn.setEnabled(True)
+                self.custom_install_btn.setEnabled(True)
         elif info == "NEED_INSTALL":
             # 需要自动部署本地 Conda
             self.conda_path_edit.setText(os.path.join(get_local_conda_dir(), "bin", "conda"))
@@ -575,6 +631,7 @@ class EnvSetupPage(QWidget):
             self.install_btn.setEnabled(True)
             self.retry_btn.setEnabled(True)
             self.verify_btn.setEnabled(True)
+            self.custom_install_btn.setEnabled(True)
         else:
             self.conda_status_label.setText(f"✗ 创建失败: {msg[:100]}")
             self.conda_status_label.setStyleSheet(f"color: {COLORS['error']};")
@@ -682,6 +739,60 @@ class EnvSetupPage(QWidget):
                     item.setText("✗ 未通过")
                     item.setForeground(QColor(COLORS["error"]))
         QMessageBox.information(self, "验证完成", "软件包验证完成，请查看表格中的状态。")
+
+    # ---- 高级设置 ----
+
+    def _install_custom(self):
+        """安装用户自定义的软件包"""
+        spec = self.custom_pkg_edit.text().strip()
+        if not spec:
+            QMessageBox.information(self, "提示", "请输入要安装的软件包名称")
+            return
+
+        env = self.get_env_manager()
+        self.custom_install_btn.setEnabled(False)
+        self.custom_pkg_edit.setEnabled(False)
+        self.adv_log_view.setPlainText(f"正在安装: {spec}\n（自动添加 bioconda 与 conda-forge 源）\n...")
+        QApplication.processEvents()
+
+        success, msg = env.install_custom_package(spec)
+        self.adv_log_view.setPlainText(env.last_log)
+
+        self.custom_install_btn.setEnabled(True)
+        self.custom_pkg_edit.setEnabled(True)
+
+        if success:
+            QMessageBox.information(self, "安装完成", msg)
+        else:
+            QMessageBox.warning(self, "安装失败", f"{msg}\n\n详细日志见「高级设置」日志区")
+
+    def _view_pkg_log(self):
+        """查看选中软件包的安装日志"""
+        rows = sorted(set(idx.row() for idx in self.pkg_table.selectedIndexes()))
+        if not rows:
+            QMessageBox.information(self, "提示", "请先在表格中选中要查看日志的软件包")
+            return
+
+        env = self.get_env_manager()
+        lines = []
+        for row in rows:
+            if row >= len(PACKAGES):
+                continue
+            pkg = PACKAGES[row]
+            lines.append(f"===== {pkg.name} 最近一次安装日志 =====\n")
+            lines.append(env.get_package_log(pkg.name))
+            lines.append("")
+        self.adv_log_view.setPlainText("\n".join(lines))
+
+    def _view_last_log(self):
+        """查看最近一次 conda 命令的完整输出"""
+        env = self.get_env_manager()
+        if not env.last_log:
+            self.adv_log_view.setPlainText("（暂无命令记录，请先执行安装/验证操作）")
+            return
+        self.adv_log_view.setPlainText(
+            f"$ {env.last_cmd}\n\n{env.last_log}"
+        )
 
 
 # ============================================================

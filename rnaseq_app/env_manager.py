@@ -135,6 +135,34 @@ class CondaEnvManager:
     def __init__(self, env_name: str, conda_path: str = ""):
         self.env_name = env_name
         self._conda_exe = self._resolve_conda(conda_path)
+        # 操作日志（供高级设置查看）
+        self.last_log: str = ""           # 最近一次命令的完整输出
+        self.last_cmd: str = ""           # 最近一次命令
+        self.pkg_logs: dict = {}          # 包名 -> 最近一次安装的完整输出
+
+    # ---- 统一命令执行（记录完整日志） ----
+
+    def _exec(self, cmd: List[str], timeout: int, cwd: str = "") -> Tuple[int, str, str]:
+        """
+        执行 conda 命令并记录完整输出到 self.last_log
+        返回: (returncode, stdout, stderr)
+        """
+        self.last_cmd = " ".join(cmd)
+        try:
+            result = subprocess.run(
+                cmd, capture_output=True, text=True,
+                timeout=timeout, cwd=cwd or None, env=_conda_env(),
+            )
+            self.last_log = result.stdout
+            if result.stderr:
+                self.last_log += "\n[stderr]\n" + result.stderr
+            return result.returncode, result.stdout, result.stderr
+        except subprocess.TimeoutExpired:
+            self.last_log = f"命令超时（>{timeout}秒）"
+            return -1, "", self.last_log
+        except Exception as e:
+            self.last_log = str(e)
+            return -1, "", str(e)
 
     # ---- Conda 解析（自包含优先） ----
 
@@ -343,12 +371,10 @@ class CondaEnvManager:
             cmd = [self._conda_exe, "create", "-p", prefix, "-y", "python=3.8"]
 
         try:
-            result = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=300, env=_conda_env()
-            )
-            if result.returncode == 0:
+            rc, out, err = self._exec(cmd, 300)
+            if rc == 0:
                 return True, f"环境 '{self.env_name}' 创建成功"
-            return False, result.stderr[-500:] if result.stderr else "未知错误"
+            return False, (err or out)[-500:]
         except subprocess.TimeoutExpired:
             return False, "创建环境超时（超过5分钟）"
         except Exception as e:
@@ -362,19 +388,38 @@ class CondaEnvManager:
         pkg_spec = f"{pkg.name}={pkg.version}" if pkg.version else pkg.name
         cmd.append(pkg_spec)
 
-        try:
-            result = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=600, env=_conda_env()
-            )
-            if result.returncode == 0:
-                return True, f"✓ {pkg.display_name} 安装成功"
-            if "already installed" in (result.stderr + result.stdout).lower():
-                return True, f"✓ {pkg.display_name} (已安装)"
-            return False, f"✗ {pkg.display_name}: {result.stderr[-300:]}"
-        except subprocess.TimeoutExpired:
-            return False, f"✗ {pkg.display_name} 安装超时"
-        except Exception as e:
-            return False, f"✗ {pkg.display_name}: {e}"
+        rc, out, err = self._exec(cmd, 600)
+        self.pkg_logs[pkg.name] = self.last_log
+
+        if rc == 0:
+            return True, f"✓ {pkg.display_name} 安装成功"
+        if "already installed" in (out + err).lower():
+            return True, f"✓ {pkg.display_name} (已安装)"
+        return False, f"✗ {pkg.display_name}: {(err or out)[-300:]}"
+
+    def install_custom_package(self, spec: str) -> Tuple[bool, str]:
+        """
+        安装用户自定义的软件包。
+        spec: 包名或包规格，如 "salmon" / "hisat2=2.2.1"
+        """
+        spec = spec.strip()
+        if not spec:
+            return False, "请输入要安装的软件包名称"
+
+        # 自动补齐 channels（bioconda + conda-forge）
+        cmd = [self._conda_exe, "install", "-n", self.env_name, "-y",
+               "-c", "bioconda", "-c", "conda-forge", spec]
+
+        rc, out, err = self._exec(cmd, 600)
+        if rc == 0:
+            return True, f"✓ {spec} 安装成功"
+        if "already installed" in (out + err).lower():
+            return True, f"✓ {spec} (已安装)"
+        return False, f"✗ {spec}: {(err or out)[-500:]}"
+
+    def get_package_log(self, pkg_name: str) -> str:
+        """获取某软件包最近一次安装的完整日志"""
+        return self.pkg_logs.get(pkg_name, "(无记录)")
 
     def install_all_packages(self, progress_callback=None) -> List[Tuple[str, bool, str]]:
         results = []
@@ -399,20 +444,11 @@ class CondaEnvManager:
 
     def run_in_env(self, command: str, cwd: str = "", timeout: int = 3600) -> Tuple[bool, str]:
         full_cmd = [self._conda_exe, "run", "-n", self.env_name, "bash", "-c", command]
-        try:
-            result = subprocess.run(
-                full_cmd, capture_output=True, text=True,
-                timeout=timeout, cwd=cwd or None, shell=False,
-                env=_conda_env(),
-            )
-            output = result.stdout
-            if result.stderr:
-                output += "\n" + result.stderr
-            return result.returncode == 0, output
-        except subprocess.TimeoutExpired:
-            return False, f"命令超时（>{timeout}秒）: {command[:100]}"
-        except Exception as e:
-            return False, str(e)
+        rc, out, err = self._exec(full_cmd, timeout, cwd=cwd)
+        output = out
+        if err:
+            output += "\n" + err
+        return rc == 0, output
 
     def run_script(self, script_path: str, cwd: str = "", timeout: int = 3600) -> Tuple[bool, str]:
         return self.run_in_env(f"bash {script_path}", cwd=cwd, timeout=timeout)
