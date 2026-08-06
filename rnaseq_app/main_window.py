@@ -446,13 +446,32 @@ class EnvSetupPage(QWidget):
             QPushButton:hover {{ background-color: {COLORS['primary_btn_hover']}; }}
             QPushButton:disabled {{ background-color: #bdc3c7; }}
         """)
+        self.retry_btn = QPushButton("↻ 重装选中软件包")
+        self.retry_btn.clicked.connect(self._retry_package)
+        self.retry_btn.setEnabled(False)
+        self.retry_btn.setToolTip("在表格中选中一行（可多选），点击后仅重装选中的软件包")
+        self.retry_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {COLORS['warning']};
+                color: white;
+                padding: 8px 20px;
+                border-radius: 4px;
+                font-weight: bold;
+            }}
+            QPushButton:hover {{ background-color: #e67e22; }}
+            QPushButton:disabled {{ background-color: #bdc3c7; }}
+        """)
         self.verify_btn = QPushButton("验证安装")
         self.verify_btn.clicked.connect(self._verify_packages)
         self.verify_btn.setEnabled(False)
         pkg_btn_layout.addWidget(self.install_btn)
+        pkg_btn_layout.addWidget(self.retry_btn)
         pkg_btn_layout.addWidget(self.verify_btn)
         pkg_btn_layout.addStretch()
         g2_layout.addLayout(pkg_btn_layout)
+
+        # 双击某行也触发重装
+        self.pkg_table.itemDoubleClicked.connect(self._retry_package)
 
         layout.addWidget(group2)
         layout.addStretch()
@@ -503,6 +522,7 @@ class EnvSetupPage(QWidget):
                 self.conda_status_label.setText(f"✓ {info}  |  环境 '{env.env_name}' 已存在")
                 self.create_env_btn.setText("重建环境")
                 self.install_btn.setEnabled(True)
+                self.retry_btn.setEnabled(True)
                 self.verify_btn.setEnabled(True)
         elif info == "NEED_INSTALL":
             # 需要自动部署本地 Conda
@@ -553,6 +573,7 @@ class EnvSetupPage(QWidget):
             self.conda_status_label.setText(f"✓ 环境 '{env.env_name}' 创建成功")
             self.conda_status_label.setStyleSheet(f"color: {COLORS['success']}; font-weight: bold;")
             self.install_btn.setEnabled(True)
+            self.retry_btn.setEnabled(True)
             self.verify_btn.setEnabled(True)
         else:
             self.conda_status_label.setText(f"✗ 创建失败: {msg[:100]}")
@@ -592,6 +613,59 @@ class EnvSetupPage(QWidget):
             self, "安装完成",
             f"软件包安装完成\n"
             f"成功: {sum(1 for _, s, _ in results if s)}/{len(results)}"
+        )
+
+    def _retry_package(self, item=None):
+        """重装选中的软件包（支持表格选中多行 / 双击单行）"""
+        # 双击触发时 item 为被双击的项；按钮触发时为 None
+        if item is not None:
+            selected_rows = [item.row()]
+        else:
+            selected_rows = sorted(set(
+                idx.row() for idx in self.pkg_table.selectedIndexes()
+            ))
+            if not selected_rows:
+                QMessageBox.information(
+                    self, "提示", "请先在表格中选中要重装的软件包（可按住 Ctrl 多选）"
+                )
+                return
+
+        env = self.get_env_manager()
+        self.retry_btn.setEnabled(False)
+        QApplication.processEvents()
+
+        results = []
+        for row in selected_rows:
+            if row >= len(PACKAGES):
+                continue
+            pkg = PACKAGES[row]
+            # 更新状态为安装中
+            status_item = self.pkg_table.item(row, 2)
+            if status_item:
+                status_item.setText("安装中...")
+                status_item.setForeground(QColor(COLORS["running"]))
+            QApplication.processEvents()
+
+            success, msg = env.install_package(pkg)
+            results.append((pkg.name, success, msg))
+
+            # 更新结果
+            if status_item:
+                status_item.setText("✓ 已安装" if success else "✗ 失败")
+                status_item.setForeground(
+                    QColor(COLORS["success"] if success else COLORS["error"])
+                )
+            QApplication.processEvents()
+
+        self.retry_btn.setEnabled(True)
+        self.verify_btn.setEnabled(True)
+
+        ok_count = sum(1 for _, s, _ in results if s)
+        QMessageBox.information(
+            self, "重装完成",
+            f"重装完成\n成功: {ok_count}/{len(results)}\n"
+            + ("全部成功！" if ok_count == len(results)
+               else "失败的软件包可再次选中后重装。")
         )
 
     def _verify_packages(self):
