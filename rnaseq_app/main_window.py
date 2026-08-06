@@ -31,7 +31,7 @@ from PyQt5.QtWidgets import (
     QTabWidget, QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox,
     QTableWidget, QTableWidgetItem, QHeaderView, QCheckBox, QGroupBox,
     QFormLayout, QGridLayout, QSizePolicy, QAbstractItemView,
-    QPlainTextEdit, QStatusBar, QMenuBar, QAction, QStyle,
+    QPlainTextEdit, QStatusBar, QMenuBar, QAction, QStyle, QScrollArea,
 )
 from PyQt5.QtCore import Qt, QTimer, pyqtSlot, pyqtSignal
 from PyQt5.QtGui import QFont, QColor, QTextCursor, QIcon, QPalette
@@ -379,8 +379,20 @@ class EnvSetupPage(QWidget):
         self._setup_ui()
 
     def _setup_ui(self):
-        layout = QVBoxLayout(self)
+        # 外层滚动区域（解决窗口小内容被挤压的问题）
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setStyleSheet("QScrollArea { background: transparent; }")
+        outer.addWidget(scroll)
+
+        content = QWidget()
+        scroll.setWidget(content)
+        layout = QVBoxLayout(content)
         layout.setSpacing(16)
+        layout.setContentsMargins(12, 12, 12, 12)
 
         # ---- Conda 检测 ----
         group1 = QGroupBox("Conda 环境")
@@ -414,20 +426,24 @@ class EnvSetupPage(QWidget):
         layout.addWidget(group1)
 
         # ---- 软件包安装 ----
-        group2 = QGroupBox("软件包安装")
+        group2 = QGroupBox("软件包安装（★ 为 De Novo 流程必需）")
         group2.setStyleSheet(self._group_style())
         g2_layout = QVBoxLayout(group2)
 
         self.pkg_table = QTableWidget()
-        self.pkg_table.setColumnCount(3)
-        self.pkg_table.setHorizontalHeaderLabels(["软件包", "版本", "状态"])
+        self.pkg_table.setColumnCount(4)
+        self.pkg_table.setHorizontalHeaderLabels(["软件包", "已装版本", "类型", "状态"])
         self.pkg_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
         self.pkg_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
         self.pkg_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        self.pkg_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
         self.pkg_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.pkg_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.pkg_table.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.pkg_table.verticalHeader().setVisible(False)
         self.pkg_table.setAlternatingRowColors(True)
+        self.pkg_table.setMinimumHeight(300)
+        self.pkg_table.setToolTip("选中一行可单独重装；双击行也触发重装")
         self._populate_pkg_table()
         g2_layout.addWidget(self.pkg_table)
 
@@ -511,7 +527,7 @@ class EnvSetupPage(QWidget):
 
         self.adv_log_view = QPlainTextEdit()
         self.adv_log_view.setReadOnly(True)
-        self.adv_log_view.setMaximumHeight(160)
+        self.adv_log_view.setMinimumHeight(200)
         self.adv_log_view.setPlaceholderText(
             "安装失败时，这里显示 conda 的完整输出，帮助定位问题。\n"
             "提示：选中表格中的软件包，点「查看选中包日志」看该包安装记录。"
@@ -549,12 +565,41 @@ class EnvSetupPage(QWidget):
         """
 
     def _populate_pkg_table(self):
+        """填充内置软件包列表（版本列留空，安装后显示实际版本）"""
         self.pkg_table.setRowCount(len(PACKAGES))
         for i, pkg in enumerate(PACKAGES):
             self.pkg_table.setItem(i, 0, QTableWidgetItem(pkg.name))
-            ver = pkg.version if pkg.version else "latest"
-            self.pkg_table.setItem(i, 1, QTableWidgetItem(ver))
-            self.pkg_table.setItem(i, 2, QTableWidgetItem("未安装"))
+            self.pkg_table.setItem(i, 1, QTableWidgetItem(""))  # 实际版本，安装后查询填入
+            type_item = QTableWidgetItem("★ 必需" if pkg.required else "可选")
+            if pkg.required:
+                type_item.setForeground(QColor("#c0392b"))
+                type_item.setToolTip(pkg.description or "De Novo 流程必需")
+            else:
+                type_item.setForeground(QColor("#7f8c8d"))
+                type_item.setToolTip(pkg.description or "")
+            self.pkg_table.setItem(i, 2, type_item)
+            self.pkg_table.setItem(i, 3, QTableWidgetItem("未安装"))
+
+    def _add_custom_pkg_row(self, pkg_name: str, version: str = "", status: str = "已安装"):
+        """把用户自定义安装的软件包动态添加到表格末尾"""
+        row = self.pkg_table.rowCount()
+        self.pkg_table.insertRow(row)
+        self.pkg_table.setItem(row, 0, QTableWidgetItem(pkg_name))
+        self.pkg_table.setItem(row, 1, QTableWidgetItem(version))
+        type_item = QTableWidgetItem("自定义")
+        type_item.setForeground(QColor("#2980b9"))
+        self.pkg_table.setItem(row, 2, type_item)
+        status_item = QTableWidgetItem(status)
+        status_item.setForeground(QColor(COLORS["success"] if status == "已安装" else COLORS["error"]))
+        self.pkg_table.setItem(row, 3, status_item)
+
+    def _find_pkg_row(self, pkg_name: str) -> int:
+        """按包名查找表格行号（找不到返回 -1）"""
+        for row in range(self.pkg_table.rowCount()):
+            item = self.pkg_table.item(row, 0)
+            if item and item.text().lower() == pkg_name.lower():
+                return row
+        return -1
 
     def get_env_manager(self) -> CondaEnvManager:
         if self.env_manager is None:
@@ -642,34 +687,37 @@ class EnvSetupPage(QWidget):
         self.install_btn.setEnabled(False)
         self.verify_btn.setEnabled(False)
 
-        for i in range(self.pkg_table.rowCount()):
-            self.pkg_table.item(i, 2).setText("等待安装...")
+        for i in range(len(PACKAGES)):
+            self.pkg_table.item(i, 3).setText("等待安装...")
+            self.pkg_table.item(i, 3).setForeground(QColor("#7f8c8d"))
 
         QApplication.processEvents()
 
         def progress_callback(current, total, msg):
-            # 在主线程中更新UI
             pass
 
         results = env.install_all_packages(progress_callback)
 
         for i, (name, success, msg) in enumerate(results):
-            status_text = "✓ 已安装" if success else f"✗ 失败"
-            if i < self.pkg_table.rowCount():
-                item = self.pkg_table.item(i, 2)
-                item.setText(status_text)
-                if success:
-                    item.setForeground(QColor(COLORS["success"]))
-                else:
-                    item.setForeground(QColor(COLORS["error"]))
+            if i >= len(PACKAGES):
+                continue
+            status_item = self.pkg_table.item(i, 3)
+            status_item.setText("✓ 已安装" if success else "✗ 失败")
+            status_item.setForeground(QColor(COLORS["success"] if success else COLORS["error"]))
+            if success:
+                ver = env.get_package_version(name)
+                if ver:
+                    self.pkg_table.item(i, 1).setText(ver)
 
         self.install_btn.setEnabled(True)
         self.verify_btn.setEnabled(True)
 
+        ok_count = sum(1 for _, s, _ in results if s)
         QMessageBox.information(
             self, "安装完成",
-            f"软件包安装完成\n"
-            f"成功: {sum(1 for _, s, _ in results if s)}/{len(results)}"
+            f"软件包安装完成\n成功: {ok_count}/{len(results)}\n"
+            + ("全部安装成功！" if ok_count == len(results)
+               else "失败的软件包可在表格中选中后单独重装，或查看日志定位问题。")
         )
 
     def _retry_package(self, item=None):
@@ -694,25 +742,37 @@ class EnvSetupPage(QWidget):
 
         results = []
         for row in selected_rows:
-            if row >= len(PACKAGES):
+            pkg_item = self.pkg_table.item(row, 0)
+            if not pkg_item:
                 continue
-            pkg = PACKAGES[row]
+            pkg_name = pkg_item.text().strip()
+
             # 更新状态为安装中
-            status_item = self.pkg_table.item(row, 2)
+            status_item = self.pkg_table.item(row, 3)
             if status_item:
                 status_item.setText("安装中...")
                 status_item.setForeground(QColor(COLORS["running"]))
             QApplication.processEvents()
 
-            success, msg = env.install_package(pkg)
-            results.append((pkg.name, success, msg))
+            # 内置包走标准安装；自定义包走通用安装
+            pkg = next((p for p in PACKAGES if p.name == pkg_name), None)
+            if pkg is not None:
+                success, msg = env.install_package(pkg)
+            else:
+                success, msg = env.install_custom_package(pkg_name)
+            results.append((pkg_name, success, msg))
 
-            # 更新结果
+            # 更新结果 + 版本
             if status_item:
                 status_item.setText("✓ 已安装" if success else "✗ 失败")
                 status_item.setForeground(
                     QColor(COLORS["success"] if success else COLORS["error"])
                 )
+            if success:
+                ver = env.get_package_version(pkg_name)
+                ver_item = self.pkg_table.item(row, 1)
+                if ver_item and ver:
+                    ver_item.setText(ver)
             QApplication.processEvents()
 
         self.retry_btn.setEnabled(True)
@@ -723,21 +783,27 @@ class EnvSetupPage(QWidget):
             self, "重装完成",
             f"重装完成\n成功: {ok_count}/{len(results)}\n"
             + ("全部成功！" if ok_count == len(results)
-               else "失败的软件包可再次选中后重装。")
+               else "失败的软件包可再次选中后重装，或在高级设置中查看日志。")
         )
 
     def _verify_packages(self):
         env = self.get_env_manager()
         results = env.verify_all_packages()
         for i, (name, success, msg) in enumerate(results):
-            if i < self.pkg_table.rowCount():
-                item = self.pkg_table.item(i, 2)
-                if success:
-                    item.setText("✓ 已验证")
-                    item.setForeground(QColor(COLORS["success"]))
-                else:
-                    item.setText("✗ 未通过")
-                    item.setForeground(QColor(COLORS["error"]))
+            row = self._find_pkg_row(name)
+            if row < 0:
+                continue
+            item = self.pkg_table.item(row, 3)
+            if success:
+                item.setText("✓ 已验证")
+                item.setForeground(QColor(COLORS["success"]))
+            else:
+                item.setText("✗ 未通过")
+                item.setForeground(QColor(COLORS["error"]))
+            # 顺带回填实际版本
+            ver = env.get_package_version(name)
+            if ver:
+                self.pkg_table.item(row, 1).setText(ver)
         QMessageBox.information(self, "验证完成", "软件包验证完成，请查看表格中的状态。")
 
     # ---- 高级设置 ----
@@ -748,6 +814,9 @@ class EnvSetupPage(QWidget):
         if not spec:
             QMessageBox.information(self, "提示", "请输入要安装的软件包名称")
             return
+
+        # 提取纯包名（去掉版本约束），用于表格行
+        base_name = spec.split("=")[0].split(">")[0].split("<")[0].strip()
 
         env = self.get_env_manager()
         self.custom_install_btn.setEnabled(False)
@@ -760,6 +829,24 @@ class EnvSetupPage(QWidget):
 
         self.custom_install_btn.setEnabled(True)
         self.custom_pkg_edit.setEnabled(True)
+
+        # 把自定义包加入表格（已存在则更新版本/状态）
+        ver = env.get_package_version(base_name) if success else ""
+        row = self._find_pkg_row(base_name)
+        if row < 0:
+            self._add_custom_pkg_row(
+                base_name, ver,
+                "✓ 已安装" if success else "✗ 失败"
+            )
+        else:
+            ver_item = self.pkg_table.item(row, 1)
+            if ver_item and ver:
+                ver_item.setText(ver)
+            status_item = self.pkg_table.item(row, 3)
+            status_item.setText("✓ 已安装" if success else "✗ 失败")
+            status_item.setForeground(
+                QColor(COLORS["success"] if success else COLORS["error"])
+            )
 
         if success:
             QMessageBox.information(self, "安装完成", msg)
@@ -776,11 +863,12 @@ class EnvSetupPage(QWidget):
         env = self.get_env_manager()
         lines = []
         for row in rows:
-            if row >= len(PACKAGES):
+            pkg_item = self.pkg_table.item(row, 0)
+            if not pkg_item:
                 continue
-            pkg = PACKAGES[row]
-            lines.append(f"===== {pkg.name} 最近一次安装日志 =====\n")
-            lines.append(env.get_package_log(pkg.name))
+            pkg_name = pkg_item.text().strip()
+            lines.append(f"===== {pkg_name} 最近一次安装日志 =====\n")
+            lines.append(env.get_package_log(pkg_name))
             lines.append("")
         self.adv_log_view.setPlainText("\n".join(lines))
 

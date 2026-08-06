@@ -76,36 +76,70 @@ def _conda_env() -> dict:
 class PackageSpec:
     """单个软件包的安装规格"""
     name: str
-    version: str = ""
+    version: str = ""                    # 期望版本（可空=最新），安装后显示实际版本
     channel: str = "bioconda"
     extra_channels: List[str] = field(default_factory=list)
     verify_cmd: str = ""
+    required: bool = True                # 是否必需（de novo 流程必备）
+    description: str = ""                # 用途说明
 
     @property
     def display_name(self) -> str:
-        if self.version:
-            return f"{self.name}={self.version}"
-        return f"{self.name} (latest)"
+        return self.name
+
+    @property
+    def is_required(self) -> bool:
+        return self.required
 
 
 PACKAGES = [
-    PackageSpec(name="fastqc", version="0.11", verify_cmd="fastqc --version"),
-    PackageSpec(name="fastp", verify_cmd="fastp --version"),
-    PackageSpec(name="rcorrector", verify_cmd="perl -e 'exit 0'"),
+    PackageSpec(
+        name="fastqc", version="0.11",
+        verify_cmd="fastqc --version",
+        required=True, description="原始测序数据质量评估",
+    ),
+    PackageSpec(
+        name="fastp",
+        verify_cmd="fastp --version",
+        required=True, description="数据过滤与去接头",
+    ),
+    PackageSpec(
+        name="rcorrector",
+        verify_cmd="perl -e 'exit 0'",
+        required=True, description="RNA-seq reads 纠错",
+    ),
     PackageSpec(
         name="trinity", version="2.8",
         extra_channels=["conda-forge"],
-        verify_cmd="Trinity --version"
+        verify_cmd="Trinity --version",
+        required=True, description="de novo 转录本组装",
     ),
-    PackageSpec(name="jellyfish", version="2.2", verify_cmd="jellyfish --version"),
-    PackageSpec(name="cd-hit", version="4.8", verify_cmd="cd-hit --version"),
+    PackageSpec(
+        name="jellyfish", version="2.2",
+        verify_cmd="jellyfish --version",
+        required=True, description="k-mer 计数（Trinity 依赖）",
+    ),
+    PackageSpec(
+        name="cd-hit", version="4.8",
+        verify_cmd="cd-hit --version",
+        required=True, description="转录本聚类去冗余",
+    ),
     PackageSpec(
         name="transdecoder", version="5.5",
         extra_channels=["conda-forge"],
-        verify_cmd="TransDecoder.LongOrfs --version"
+        verify_cmd="TransDecoder.LongOrfs --version",
+        required=True, description="CDS 开放阅读框预测",
     ),
-    PackageSpec(name="kallisto", version="0.51", verify_cmd="kallisto version"),
-    PackageSpec(name="gffread", verify_cmd="gffread --version"),
+    PackageSpec(
+        name="kallisto", version="0.51",
+        verify_cmd="kallisto version",
+        required=True, description="转录本定量",
+    ),
+    PackageSpec(
+        name="gffread",
+        verify_cmd="gffread --version",
+        required=True, description="GFF3 注释与序列提取",
+    ),
 ]
 
 # Miniconda 下载地址
@@ -380,6 +414,22 @@ class CondaEnvManager:
         except Exception as e:
             return False, str(e)
 
+    def get_package_version(self, pkg_name: str) -> str:
+        """查询环境中某软件包的实际安装版本（未安装返回空）"""
+        try:
+            rc, out, _ = self._exec(
+                [self._conda_exe, "list", "-n", self.env_name, pkg_name], 30
+            )
+            if rc != 0:
+                return ""
+            for line in out.splitlines():
+                parts = line.split()
+                if len(parts) >= 2 and parts[0].lower() == pkg_name.lower():
+                    return parts[1]
+        except Exception:
+            pass
+        return ""
+
     def install_package(self, pkg: PackageSpec) -> Tuple[bool, str]:
         cmd = [self._conda_exe, "install", "-n", self.env_name, "-y"]
         cmd.extend(["-c", pkg.channel])
@@ -392,29 +442,44 @@ class CondaEnvManager:
         self.pkg_logs[pkg.name] = self.last_log
 
         if rc == 0:
-            return True, f"✓ {pkg.display_name} 安装成功"
+            ver = self.get_package_version(pkg.name)
+            ver_str = f" (v{ver})" if ver else ""
+            return True, f"✓ {pkg.name}{ver_str} 安装成功"
         if "already installed" in (out + err).lower():
-            return True, f"✓ {pkg.display_name} (已安装)"
-        return False, f"✗ {pkg.display_name}: {(err or out)[-300:]}"
+            ver = self.get_package_version(pkg.name)
+            ver_str = f" (v{ver})" if ver else ""
+            return True, f"✓ {pkg.name}{ver_str} (已安装)"
+        return False, f"✗ {pkg.name}: {(err or out)[-300:]}"
 
     def install_custom_package(self, spec: str) -> Tuple[bool, str]:
         """
         安装用户自定义的软件包。
         spec: 包名或包规格，如 "salmon" / "hisat2=2.2.1"
+        返回: (成功, 消息)，成功时消息包含实际版本
         """
         spec = spec.strip()
         if not spec:
             return False, "请输入要安装的软件包名称"
+
+        # 提取纯包名（去掉版本约束）
+        base_name = spec.split("=")[0].split(">")[0].split("<")[0].strip()
 
         # 自动补齐 channels（bioconda + conda-forge）
         cmd = [self._conda_exe, "install", "-n", self.env_name, "-y",
                "-c", "bioconda", "-c", "conda-forge", spec]
 
         rc, out, err = self._exec(cmd, 600)
+        if base_name:
+            self.pkg_logs[base_name] = self.last_log
+
         if rc == 0:
-            return True, f"✓ {spec} 安装成功"
+            ver = self.get_package_version(base_name) if base_name else ""
+            ver_str = f" (v{ver})" if ver else ""
+            return True, f"✓ {spec}{ver_str} 安装成功"
         if "already installed" in (out + err).lower():
-            return True, f"✓ {spec} (已安装)"
+            ver = self.get_package_version(base_name) if base_name else ""
+            ver_str = f" (v{ver})" if ver else ""
+            return True, f"✓ {spec}{ver_str} (已安装)"
         return False, f"✗ {spec}: {(err or out)[-500:]}"
 
     def get_package_log(self, pkg_name: str) -> str:
