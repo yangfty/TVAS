@@ -53,6 +53,22 @@ def get_local_envs_dir() -> str:
 
 
 # ============================================================
+# Conda ToS 条款自动接受
+# ============================================================
+# 新版 Miniconda (>=23.11) 捆绑 conda-anaconda-tos 插件，
+# 要求显式接受 Anaconda 官方 channel 的服务条款。
+# 非交互运行（如本程序）时 conda 无法弹窗确认会报
+# CondaToSNonInteractiveError，因此注入环境变量自动接受。
+
+def _conda_env() -> dict:
+    """构造 conda 子进程环境变量（自动接受 ToS）"""
+    env = dict(os.environ)
+    env["CONDA_PLUGINS_AUTO_ACCEPT_TOS"] = "true"
+    env.setdefault("CONDA_AUTO_UPDATE_CONDA", "false")
+    return env
+
+
+# ============================================================
 # 软件包安装清单
 # ============================================================
 
@@ -200,6 +216,7 @@ class CondaEnvManager:
             result = subprocess.run(
                 ["bash", installer_path, "-b", "-p", local_dir],
                 capture_output=True, text=True, timeout=300,
+                env=_conda_env(),
             )
             if result.returncode != 0:
                 return False, f"安装失败: {result.stderr[-300:]}"
@@ -221,7 +238,22 @@ class CondaEnvManager:
         try:
             subprocess.run(
                 [conda_bin, "config", "--set", "auto_activate_base", "false"],
-                capture_output=True, timeout=30,
+                capture_output=True, timeout=30, env=_conda_env(),
+            )
+        except Exception:
+            pass
+
+        # 显式接受 Anaconda ToS（双保险，兼容未识别环境变量的版本）
+        try:
+            subprocess.run(
+                [conda_bin, "tos", "accept", "--override-channels",
+                 "--channel", "https://repo.anaconda.com/pkgs/main"],
+                capture_output=True, timeout=30, env=_conda_env(),
+            )
+            subprocess.run(
+                [conda_bin, "tos", "accept", "--override-channels",
+                 "--channel", "https://repo.anaconda.com/pkgs/r"],
+                capture_output=True, timeout=30, env=_conda_env(),
             )
         except Exception:
             pass
@@ -241,6 +273,7 @@ class CondaEnvManager:
             result = subprocess.run(
                 [self._conda_exe, "--version"],
                 capture_output=True, text=True, timeout=10,
+                env=_conda_env(),
             )
             if result.returncode == 0:
                 return True, result.stdout.strip()
@@ -266,6 +299,7 @@ class CondaEnvManager:
             result = subprocess.run(
                 [self._conda_exe, "env", "list"],
                 capture_output=True, text=True, timeout=15,
+                env=_conda_env(),
             )
             for line in result.stdout.splitlines():
                 line = line.strip()
@@ -283,6 +317,7 @@ class CondaEnvManager:
             result = subprocess.run(
                 [self._conda_exe, "env", "list"],
                 capture_output=True, text=True, timeout=15,
+                env=_conda_env(),
             )
             for line in result.stdout.splitlines():
                 line = line.strip()
@@ -308,7 +343,9 @@ class CondaEnvManager:
             cmd = [self._conda_exe, "create", "-p", prefix, "-y", "python=3.8"]
 
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=300, env=_conda_env()
+            )
             if result.returncode == 0:
                 return True, f"环境 '{self.env_name}' 创建成功"
             return False, result.stderr[-500:] if result.stderr else "未知错误"
@@ -326,7 +363,9 @@ class CondaEnvManager:
         cmd.append(pkg_spec)
 
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=600, env=_conda_env()
+            )
             if result.returncode == 0:
                 return True, f"✓ {pkg.display_name} 安装成功"
             if "already installed" in (result.stderr + result.stdout).lower():
@@ -364,6 +403,7 @@ class CondaEnvManager:
             result = subprocess.run(
                 full_cmd, capture_output=True, text=True,
                 timeout=timeout, cwd=cwd or None, shell=False,
+                env=_conda_env(),
             )
             output = result.stdout
             if result.stderr:

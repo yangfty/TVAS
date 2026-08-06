@@ -6,6 +6,15 @@
 
 ---
 
+## [0.0.7] - 2026-08-06
+
+### 修复
+- 修复 CondaToSNonInteractiveError：新版 Miniconda 要求接受 Anaconda 服务条款
+- 所有 conda 调用注入 `CONDA_PLUGINS_AUTO_ACCEPT_TOS=true`
+- 本地 Miniconda 安装后自动执行 `conda tos accept`
+
+---
+
 ## [0.0.6] - 2026-08-06
 
 ### 新增 (UI 架构升级)
