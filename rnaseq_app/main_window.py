@@ -447,7 +447,7 @@ class EnvSetupPage(QWidget):
             QPushButton:disabled {{ background-color: #bdc3c7; }}
         """)
         self.retry_btn = QPushButton("↻ 重装选中软件包")
-        self.retry_btn.clicked.connect(self._retry_package)
+        self.retry_btn.clicked.connect(lambda: self._retry_package())
         self.retry_btn.setEnabled(False)
         self.retry_btn.setToolTip("在表格中选中一行（可多选），点击后仅重装选中的软件包")
         self.retry_btn.setStyleSheet(f"""
@@ -617,8 +617,9 @@ class EnvSetupPage(QWidget):
 
     def _retry_package(self, item=None):
         """重装选中的软件包（支持表格选中多行 / 双击单行）"""
-        # 双击触发时 item 为被双击的项；按钮触发时为 None
-        if item is not None:
+        # 双击触发时 item 为 QTableWidgetItem；按钮触发时为 None
+        # 注意: 不能用 `is not None` 判断，因为按钮 clicked 信号可能传入 False
+        if isinstance(item, QTableWidgetItem):
             selected_rows = [item.row()]
         else:
             selected_rows = sorted(set(
