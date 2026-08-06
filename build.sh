@@ -21,7 +21,7 @@ cd "$SCRIPT_DIR"
 if [ -f VERSION ]; then
     VERSION=$(cat VERSION | tr -d '[:space:]')
 else
-    VERSION="0.0.3"
+    VERSION="0.0.4"
 fi
 
 APP_NAME="转录组DeNovo组装"
@@ -112,6 +112,9 @@ pyinstaller \
     --add-data="scripts:scripts" \
     --hidden-import="PyQt5.QtSvg" \
     --hidden-import="PyQt5.QtXml" \
+    --hidden-import="pkgutil" \
+    --hidden-import="importlib" \
+    --hidden-import="importlib.util" \
     --clean \
     --noconfirm \
     main.py

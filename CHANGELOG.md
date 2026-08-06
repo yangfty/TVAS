@@ -6,6 +6,14 @@
 
 ---
 
+## [0.0.4] - 2026-08-06
+
+### 修复
+- 修复 PyInstaller 打包缺少 `pkgutil` 模块导致启动崩溃 (ModuleNotFoundError)
+- 显式打包 pkgutil/importlib 等标准库模块
+
+---
+
 ## [0.0.3] - 2026-08-05
 
 ### 修复
