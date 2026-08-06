@@ -35,7 +35,7 @@
 # 2. 构建 deb 包
 ./build.sh --deb
 
-# 输出: dist/TVAS_V0.0.4_amd64.deb
+# 输出: dist/TVAS_V0.0.5_amd64.deb
 ```
 
 ## 提交上架

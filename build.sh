@@ -21,7 +21,7 @@ cd "$SCRIPT_DIR"
 if [ -f VERSION ]; then
     VERSION=$(cat VERSION | tr -d '[:space:]')
 else
-    VERSION="0.0.4"
+    VERSION="0.0.5"
 fi
 
 APP_NAME="转录组DeNovo组装"
@@ -115,6 +115,7 @@ pyinstaller \
     --hidden-import="pkgutil" \
     --hidden-import="importlib" \
     --hidden-import="importlib.util" \
+    --collect-all="PyQt5" \
     --clean \
     --noconfirm \
     main.py
@@ -147,7 +148,7 @@ Architecture: amd64
 Maintainer: RNA-seq Analysis Tools <dev@example.com>
 Section: science
 Priority: optional
-Depends: python3, python3-pyqt5
+Depends: python3, libxcb-xinerama0, libxcb-icccm4, libxcb-image0, libxcb-keysyms1, libxcb-render-util0, libxkbcommon-x11-0, libegl1
 Recommends: conda
 Homepage: https://github.com/yangfty/TVAS
 Description: 转录组DeNovo组装分析工具 (GUI)
