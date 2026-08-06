@@ -1,7 +1,11 @@
 """
-转录组de novo组装软件 - 主界面
+转录组分析软件 - 主界面
 
-横向三栏布局:
+三大分析模块:
+  [1. De Novo 组装]  [2. 序列比对]  [3. 差异表达分析]
+        ┃                    ┃                 ┃
+        ┃                (开发中占位)     (开发中占位)
+        ▼
 ┌──────────┬─────────────────────┬──────────┐
 │          │                     │          │
 │  步骤    │     主内容区         │  参数    │
@@ -29,7 +33,7 @@ from PyQt5.QtWidgets import (
     QFormLayout, QGridLayout, QSizePolicy, QAbstractItemView,
     QPlainTextEdit, QStatusBar, QMenuBar, QAction, QStyle,
 )
-from PyQt5.QtCore import Qt, QTimer, pyqtSlot
+from PyQt5.QtCore import Qt, QTimer, pyqtSlot, pyqtSignal
 from PyQt5.QtGui import QFont, QColor, QTextCursor, QIcon, QPalette
 
 from .config import ConfigManager
@@ -85,6 +89,185 @@ COLORS = {
     "danger_btn": "#e74c3c",
     "card_bg": "#ffffff",
 }
+
+
+# ============================================================
+# 模块导航栏
+# ============================================================
+
+class ModuleNavBar(QFrame):
+    """顶部三大模块导航栏"""
+
+    module_selected = pyqtSignal(int)
+
+    # 模块定义: (名称, 状态, 说明)
+    MODULES = [
+        ("1. De Novo 组装", "可用"),
+        ("2. 序列比对", "开发中"),
+        ("3. 差异表达分析", "开发中"),
+    ]
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedHeight(52)
+        self.setStyleSheet(f"""
+            QFrame {{
+                background-color: {COLORS['sidebar_bg']};
+                border: none;
+            }}
+        """)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(12, 0, 12, 0)
+        layout.setSpacing(6)
+
+        # 应用名
+        app_label = QLabel("🧬 TVAS · 转录组分析")
+        app_label.setStyleSheet(f"""
+            QLabel {{
+                color: {COLORS['sidebar_text']};
+                font-size: 15px;
+                font-weight: bold;
+                padding-right: 16px;
+            }}
+        """)
+        layout.addWidget(app_label)
+        layout.addSpacing(8)
+
+        self._buttons: List[QPushButton] = []
+        for idx, (name, status) in enumerate(self.MODULES):
+            btn = QPushButton(name)
+            btn.setCheckable(True)
+            btn.setCursor(Qt.PointingHandCursor)
+            btn.setStyleSheet(f"""
+                QPushButton {{
+                    color: {COLORS['sidebar_text']};
+                    background: transparent;
+                    border: none;
+                    padding: 8px 18px;
+                    border-radius: 6px;
+                    font-size: 14px;
+                }}
+                QPushButton:hover {{
+                    background-color: rgba(255,255,255,0.12);
+                }}
+                QPushButton:checked {{
+                    background-color: {COLORS['sidebar_active']};
+                    color: white;
+                    font-weight: bold;
+                }}
+            """)
+            btn.clicked.connect(lambda checked, i=idx: self._select(i))
+            layout.addWidget(btn)
+            self._buttons.append(btn)
+
+        layout.addStretch()
+
+        # 版本号
+        ver_label = QLabel(f"v{__version__}")
+        ver_label.setStyleSheet(f"color: rgba(255,255,255,0.6); font-size: 12px;")
+        layout.addWidget(ver_label)
+
+        self._select(0)
+
+    def _select(self, idx: int):
+        """选中指定模块"""
+        for i, btn in enumerate(self._buttons):
+            btn.setChecked(i == idx)
+        self.module_selected.emit(idx)
+
+
+# ============================================================
+# 开发中模块占位页
+# ============================================================
+
+class ModulePlaceholderPage(QWidget):
+    """尚未开发完成的分析模块占位页"""
+
+    def __init__(self, module_name: str, module_desc: str,
+                 planned_steps: List[tuple], parent=None):
+        """
+        module_name: 模块名称
+        module_desc: 模块功能说明
+        planned_steps: [(步骤名, 说明), ...] 计划支持的分析流程
+        """
+        super().__init__(parent)
+        self.module_name = module_name
+        self._setup_ui(module_desc, planned_steps)
+
+    def _setup_ui(self, module_desc: str, planned_steps: List[tuple]):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(40, 40, 40, 40)
+        layout.setSpacing(20)
+
+        # 标题行
+        header = QHBoxLayout()
+        title = QLabel(self.module_name)
+        title.setStyleSheet("font-size: 24px; font-weight: bold; color: #2c3e50;")
+        header.addWidget(title)
+
+        badge = QLabel(" 开发中 ")
+        badge.setStyleSheet(f"""
+            QLabel {{
+                background-color: {COLORS['warning']};
+                color: white;
+                font-weight: bold;
+                font-size: 12px;
+                border-radius: 4px;
+                padding: 3px 10px;
+            }}
+        """)
+        header.addWidget(badge)
+        header.addStretch()
+        layout.addLayout(header)
+
+        # 说明
+        desc = QLabel(module_desc)
+        desc.setWordWrap(True)
+        desc.setStyleSheet("color: #7f8c8d; font-size: 14px;")
+        layout.addWidget(desc)
+
+        layout.addSpacing(10)
+
+        # 计划流程
+        plan_label = QLabel("📋 本模块计划支持的分析流程：")
+        plan_label.setStyleSheet("font-size: 15px; font-weight: bold; color: #34495e;")
+        layout.addWidget(plan_label)
+
+        for name, step_desc in planned_steps:
+            card = QFrame()
+            card.setStyleSheet(f"""
+                QFrame {{
+                    background-color: {COLORS['card_bg']};
+                    border: 1px solid {COLORS['border']};
+                    border-radius: 8px;
+                }}
+            """)
+            card_layout = QHBoxLayout(card)
+            card_layout.setContentsMargins(16, 10, 16, 10)
+
+            icon = QLabel("⏳")
+            icon.setStyleSheet("font-size: 18px;")
+            card_layout.addWidget(icon)
+
+            text_col = QVBoxLayout()
+            text_col.setSpacing(2)
+            step_title = QLabel(name)
+            step_title.setStyleSheet("font-size: 14px; font-weight: bold; color: #2c3e50;")
+            text_col.addWidget(step_title)
+            step_desc_label = QLabel(step_desc)
+            step_desc_label.setWordWrap(True)
+            step_desc_label.setStyleSheet("color: #95a5a6; font-size: 12px;")
+            text_col.addWidget(step_desc_label)
+            card_layout.addLayout(text_col, 1)
+
+            layout.addWidget(card)
+
+        layout.addStretch()
+
+        # 底部提示
+        tip = QLabel("该模块正在开发中，将在后续版本中开放。当前版本请使用「1. De Novo 组装」模块。")
+        tip.setStyleSheet("color: #bdc3c7; font-size: 12px;")
+        layout.addWidget(tip)
 
 
 # ============================================================
@@ -709,7 +892,7 @@ class MainWindow(QMainWindow):
         self._load_window_state()
 
     def _setup_ui(self):
-        self.setWindowTitle(f"转录组 De Novo 组装分析软件 v{__version__}")
+        self.setWindowTitle(f"转录组分析软件 v{__version__}")
         self.setMinimumSize(1100, 720)
         self.resize(1200, 800)
 
@@ -726,7 +909,22 @@ class MainWindow(QMainWindow):
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
 
-        # ---- 顶部水平区域 ----
+        # ---- 顶部模块导航 ----
+        self.module_bar = ModuleNavBar()
+        self.module_bar.module_selected.connect(self._on_module_changed)
+        main_layout.addWidget(self.module_bar)
+
+        # ---- 模块堆叠容器 ----
+        self.module_stack = QStackedWidget()
+        main_layout.addWidget(self.module_stack, 1)
+
+        # ======== 模块1: De Novo 组装（现有完整功能） ========
+        denovo_widget = QWidget()
+        denovo_layout = QVBoxLayout(denovo_widget)
+        denovo_layout.setContentsMargins(0, 0, 0, 0)
+        denovo_layout.setSpacing(0)
+
+        # 顶部水平区域
         top_splitter = QSplitter(Qt.Horizontal)
 
         # 左侧：步骤导航
@@ -763,9 +961,9 @@ class MainWindow(QMainWindow):
         top_splitter.setStretchFactor(0, 0)
         top_splitter.setStretchFactor(1, 1)
 
-        main_layout.addWidget(top_splitter, 1)
+        denovo_layout.addWidget(top_splitter, 1)
 
-        # ---- 日志输出 ----
+        # 日志输出
         log_frame = QFrame()
         log_frame.setFrameShape(QFrame.StyledPanel)
         log_frame.setMaximumHeight(220)
@@ -798,9 +996,9 @@ class MainWindow(QMainWindow):
         """)
         log_layout.addWidget(self.log_view)
 
-        main_layout.addWidget(log_frame, 0)
+        denovo_layout.addWidget(log_frame, 0)
 
-        # ---- 进度条与按钮 ----
+        # 进度条与按钮
         control_frame = QFrame()
         control_frame.setStyleSheet(f"""
             QFrame {{ background-color: {COLORS['card_bg']}; border-top: 1px solid {COLORS['border']}; }}
@@ -842,7 +1040,35 @@ class MainWindow(QMainWindow):
         self.stop_btn.setStyleSheet(self._btn_style(COLORS["danger_btn"]))
         control_layout.addWidget(self.stop_btn)
 
-        main_layout.addWidget(control_frame, 0)
+        denovo_layout.addWidget(control_frame, 0)
+
+        self.module_stack.addWidget(denovo_widget)
+
+        # ======== 模块2: 序列比对（占位） ========
+        self.align_page = ModulePlaceholderPage(
+            "测序数据比对",
+            "将转录组 reads 比对到参考基因组或转录组，获得基因表达定量数据。",
+            [
+                ("参考序列索引构建", "HISAT2 / STAR 建立参考基因组索引"),
+                ("序列比对", "将质控后的 reads 比对到参考序列 (HISAT2 / STAR / Bowtie2)"),
+                ("比对结果处理", "SAM → BAM 转换、排序、去重 (Samtools)"),
+                ("表达定量", "featureCounts / HTSeq 基因计数定量"),
+            ],
+        )
+        self.module_stack.addWidget(self.align_page)
+
+        # ======== 模块3: 差异表达分析（占位） ========
+        self.deg_page = ModulePlaceholderPage(
+            "基因差异表达分析",
+            "基于定量结果筛选差异表达基因，并进行功能富集分析。",
+            [
+                ("差异表达分析", "DESeq2 / edgeR / limma 差异基因筛选"),
+                ("结果可视化", "火山图、MA图、热图、PCA聚类图"),
+                ("GO 富集分析", "基因本体功能富集分析"),
+                ("KEGG 通路分析", "代谢通路富集分析"),
+            ],
+        )
+        self.module_stack.addWidget(self.deg_page)
 
         # ---- 状态栏 ----
         self.statusBar().showMessage("就绪 | 请先设置环境并配置样本")
@@ -889,6 +1115,19 @@ class MainWindow(QMainWindow):
 
     def _clear_log(self):
         self.log_view.clear()
+
+    # ---- 模块切换 ----
+
+    def _on_module_changed(self, idx: int):
+        """切换分析模块"""
+        self.module_stack.setCurrentIndex(idx)
+        module_names = ["De Novo 组装", "序列比对", "差异表达分析"]
+        if idx == 0:
+            self.statusBar().showMessage("就绪 | De Novo 组装模块")
+        else:
+            self.statusBar().showMessage(
+                f"{module_names[idx]} 模块开发中，将在后续版本开放"
+            )
 
     # ---- 运行流程 ----
 
@@ -1032,20 +1271,13 @@ class MainWindow(QMainWindow):
     def _show_about(self):
         QMessageBox.about(
             self, "关于",
-            "<h3>转录组 De Novo 组装分析软件 v" + __version__ + "</h3>"
-            "<p>基于 conda 环境管理的转录组测序数据 de novo 组装分析工具</p>"
-            "<p><b>分析流程:</b></p>"
+            "<h3>转录组分析软件 TVAS v" + __version__ + "</h3>"
+            "<p>基于 conda 环境管理的一站式转录组测序数据分析工具</p>"
+            "<p><b>三大分析模块:</b></p>"
             "<ol>"
-            "<li>FastQC 质量评估</li>"
-            "<li>Fastp 数据过滤</li>"
-            "<li>Rcorrector 纠错</li>"
-            "<li>Trinity 组装</li>"
-            "<li>提取最长 Isoform</li>"
-            "<li>CD-HIT 去冗余</li>"
-            "<li>序列重命名</li>"
-            "<li>TransDecoder CDS预测</li>"
-            "<li>GFF3 重命名</li>"
-            "<li>Gffread 提取序列</li>"
+            "<li><b>De Novo 组装</b> — FastQC → Fastp → Rcorrector → Trinity → CD-HIT → TransDecoder → Gffread</li>"
+            "<li><b>序列比对</b> — HISAT2/STAR 比对、Samtools 处理、featureCounts 定量 <i>(开发中)</i></li>"
+            "<li><b>差异表达分析</b> — DESeq2/edgeR 差异筛选、可视化、GO/KEGG 富集 <i>(开发中)</i></li>"
             "</ol>"
-            "<p>适用平台: UOS / Debian / Ubuntu / CentOS</p>"
+            "<p>适用平台: UOS / Debian / Ubuntu</p>"
         )

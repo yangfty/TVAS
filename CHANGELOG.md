@@ -1,8 +1,21 @@
 # 更新日志
 
-本文档记录「转录组 De Novo 组装分析软件」的所有重要变更。
+本文档记录「转录组分析软件 TVAS」的所有重要变更。
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
+
+---
+
+## [0.1.0] - 2026-08-06
+
+### 新增 (UI 架构大升级)
+- **三大分析模块导航**：顶部模块切换栏
+  - 模块 1: De Novo 组装（已实现，11 步完整流程）
+  - 模块 2: 测序数据比对（占位 — 计划 HISAT2/STAR 比对 + featureCounts 定量）
+  - 模块 3: 基因差异表达分析（占位 — 计划 DESeq2/edgeR + GO/KEGG 富集）
+- 新增 `ModuleNavBar`：顶部三模块切换条
+- 新增 `ModulePlaceholderPage`：开发中模块占位页（含计划步骤说明卡片）
+- 关于对话框更新为三大模块概览
 
 ---
 
