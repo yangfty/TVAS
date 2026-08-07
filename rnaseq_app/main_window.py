@@ -546,12 +546,31 @@ class EnvSetupPage(QWidget):
 
         layout.addWidget(group2)
 
-        # ---- 高级设置（默认折叠，需要时展开） ----
-        group3 = QGroupBox("高级设置（自定义安装 · 环境终端 · 日志）")
-        group3.setCheckable(True)
-        group3.setChecked(False)  # 默认折叠，界面更简洁
-        group3.setStyleSheet(group_style())
-        g3_layout = QVBoxLayout(group3)
+        # ---- 高级设置（默认隐藏，点击按钮展开） ----
+        self.adv_toggle_btn = QPushButton("▸ 高级设置（自定义安装 · 环境终端 · 命令日志）")
+        self.adv_toggle_btn.setCheckable(True)
+        self.adv_toggle_btn.setChecked(False)
+        self.adv_toggle_btn.setCursor(Qt.PointingHandCursor)
+        self.adv_toggle_btn.toggled.connect(self._toggle_advanced)
+        self.adv_toggle_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: #34495e;
+                color: white;
+                padding: 8px 14px;
+                border-radius: 4px;
+                font-weight: bold;
+                text-align: left;
+            }}
+            QPushButton:hover {{ background-color: #2c3e50; }}
+        """)
+        layout.addWidget(self.adv_toggle_btn)
+
+        # 高级设置内容容器（默认隐藏）
+        self.adv_container = QWidget()
+        self.adv_container.setVisible(False)
+        adv_layout = QVBoxLayout(self.adv_container)
+        adv_layout.setContentsMargins(0, 8, 0, 0)
+        adv_layout.setSpacing(8)
 
         # 自定义安装
         custom_row = QHBoxLayout()
@@ -566,47 +585,58 @@ class EnvSetupPage(QWidget):
         self.custom_install_btn.clicked.connect(self._install_custom)
         self.custom_install_btn.setEnabled(False)
         custom_row.addWidget(self.custom_install_btn)
-        g3_layout.addLayout(custom_row)
+        adv_layout.addLayout(custom_row)
 
-        # 环境终端（手动执行任意命令）
-        term_row = QHBoxLayout()
-        term_label = QLabel("环境终端:")
-        term_label.setStyleSheet("color: #555;")
-        term_row.addWidget(term_label)
-        self.term_edit = QLineEdit()
-        self.term_edit.setPlaceholderText(
-            "在分析环境中执行命令，如: conda install -c bioconda trinity=2.15 / which Trinity / trinity --version"
+        # 环境终端：输出区 + 输入行（直接输入命令，回车执行）
+        term_title = QLabel("环境终端（命令在分析环境中执行，回车运行）")
+        term_title.setStyleSheet("color: #555; font-weight: bold;")
+        adv_layout.addWidget(term_title)
+
+        self.adv_log_view = QPlainTextEdit()
+        self.adv_log_view.setReadOnly(True)
+        self.adv_log_view.setMinimumHeight(180)
+        self.adv_log_view.setPlaceholderText(
+            "在此输入命令并按回车执行，例如：\n"
+            "  conda list                 # 查看已安装软件包\n"
+            "  conda install trinity=2.15 # 安装新版本 Trinity\n"
+            "  which Trinity              # 查看 Trinity 安装位置"
         )
-        self.term_edit.returnPressed.connect(self._run_terminal_cmd)
-        term_row.addWidget(self.term_edit, 1)
-        self.term_run_btn = QPushButton("执行")
-        self.term_run_btn.clicked.connect(self._run_terminal_cmd)
-        self.term_run_btn.setEnabled(False)
-        self.term_run_btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {COLORS['primary_btn']};
-                color: white;
-                padding: 6px 18px;
+        self.adv_log_view.setStyleSheet("""
+            QPlainTextEdit {
+                background-color: #1e1e1e;
+                color: #d4d4d4;
+                font-family: "Consolas", "DejaVu Sans Mono", monospace;
+                font-size: 12px;
+                border: 1px solid #333;
                 border-radius: 4px;
-                font-weight: bold;
-            }}
-            QPushButton:disabled {{ background-color: #bdc3c7; }}
+            }
         """)
-        term_row.addWidget(self.term_run_btn)
-        g3_layout.addLayout(term_row)
-        term_hint = QLabel(
-            "提示：命令将在分析环境（conda run）中执行，可查看/安装任意软件。"
-            "例如先运行 `conda list` 查看已装包，再运行 `conda install trinity=2.15` 安装新版本。"
-        )
-        term_hint.setWordWrap(True)
-        term_hint.setStyleSheet("color: #95a5a6; font-size: 11px;")
-        g3_layout.addWidget(term_hint)
+        adv_layout.addWidget(self.adv_log_view)
 
-        # 日志区
+        term_input_row = QHBoxLayout()
+        prompt = QLabel("$")
+        prompt.setStyleSheet(f"color: {COLORS['success']}; font-weight: bold; font-size: 14px;")
+        term_input_row.addWidget(prompt)
+        self.term_input = QLineEdit()
+        self.term_input.setPlaceholderText("输入命令后按回车执行...")
+        self.term_input.returnPressed.connect(self._run_terminal_cmd)
+        self.term_input.setEnabled(False)
+        self.term_input.setStyleSheet("""
+            QLineEdit {
+                background-color: #1e1e1e;
+                color: #d4d4d4;
+                font-family: "Consolas", "DejaVu Sans Mono", monospace;
+                font-size: 12px;
+                border: 1px solid #333;
+                border-radius: 4px;
+                padding: 6px 8px;
+            }
+        """)
+        term_input_row.addWidget(self.term_input, 1)
+        adv_layout.addLayout(term_input_row)
+
+        # 日志快捷按钮
         log_row = QHBoxLayout()
-        log_label = QLabel("conda 命令输出:")
-        log_label.setStyleSheet("color: #555;")
-        log_row.addWidget(log_label)
         log_row.addStretch()
         self.view_pkg_log_btn = QPushButton("查看选中包日志")
         self.view_pkg_log_btn.clicked.connect(self._view_pkg_log)
@@ -614,29 +644,18 @@ class EnvSetupPage(QWidget):
         self.view_last_log_btn = QPushButton("查看最近命令输出")
         self.view_last_log_btn.clicked.connect(self._view_last_log)
         log_row.addWidget(self.view_last_log_btn)
-        g3_layout.addLayout(log_row)
+        adv_layout.addLayout(log_row)
 
-        self.adv_log_view = QPlainTextEdit()
-        self.adv_log_view.setReadOnly(True)
-        self.adv_log_view.setMinimumHeight(200)
-        self.adv_log_view.setPlaceholderText(
-            "安装失败时，这里显示 conda 的完整输出，帮助定位问题。\n"
-            "提示：选中表格中的软件包，点「查看选中包日志」看该包安装记录。"
-        )
-        self.adv_log_view.setStyleSheet("""
-            QPlainTextEdit {
-                background-color: #1e1e1e;
-                color: #d4d4d4;
-                font-family: "Consolas", "DejaVu Sans Mono", monospace;
-                font-size: 11px;
-                border: 1px solid #333;
-                border-radius: 4px;
-            }
-        """)
-        g3_layout.addWidget(self.adv_log_view)
-
-        layout.addWidget(group3)
+        layout.addWidget(self.adv_container)
         layout.addStretch()
+
+    def _toggle_advanced(self, checked: bool):
+        """展开/收起高级设置"""
+        self.adv_container.setVisible(checked)
+        if checked:
+            self.adv_toggle_btn.setText("▾ 高级设置（点击收起）")
+        else:
+            self.adv_toggle_btn.setText("▸ 高级设置（自定义安装 · 环境终端 · 命令日志）")
 
     def _populate_pkg_table(self):
         """填充内置软件包列表（版本列留空，安装后显示实际版本）"""
@@ -699,7 +718,7 @@ class EnvSetupPage(QWidget):
                 self.retry_btn.setEnabled(True)
                 self.verify_btn.setEnabled(True)
                 self.custom_install_btn.setEnabled(True)
-                self.term_run_btn.setEnabled(True)
+                self.term_input.setEnabled(True)
                 self.uninstall_btn.setEnabled(True)
                 self.uninstall_all_btn.setEnabled(True)
                 self.more_btn.setEnabled(True)
@@ -755,7 +774,7 @@ class EnvSetupPage(QWidget):
             self.retry_btn.setEnabled(True)
             self.verify_btn.setEnabled(True)
             self.custom_install_btn.setEnabled(True)
-            self.term_run_btn.setEnabled(True)
+            self.term_input.setEnabled(True)
             self.uninstall_btn.setEnabled(True)
             self.uninstall_all_btn.setEnabled(True)
             self.more_btn.setEnabled(True)
@@ -983,7 +1002,7 @@ class EnvSetupPage(QWidget):
             self.retry_btn.setEnabled(False)
             self.verify_btn.setEnabled(False)
             self.custom_install_btn.setEnabled(False)
-            self.term_run_btn.setEnabled(False)
+            self.term_input.setEnabled(False)
             self.more_btn.setEnabled(False)
             self.create_env_btn.setText("创建环境")
             self.create_env_btn.setEnabled(True)
@@ -1078,29 +1097,28 @@ class EnvSetupPage(QWidget):
         )
 
     def _run_terminal_cmd(self):
-        """在分析环境中手动执行命令（环境终端）"""
-        cmd = self.term_edit.text().strip()
+        """环境终端：在分析环境中执行命令，支持连续输入"""
+        cmd = self.term_input.text().strip()
         if not cmd:
-            QMessageBox.information(self, "提示", "请输入要执行的命令")
             return
 
         env = self.get_env_manager()
-        self.term_run_btn.setEnabled(False)
-        self.term_edit.setEnabled(False)
-        self.adv_log_view.setPlainText(
-            f"$ conda run -n {env.env_name} bash -c \"{cmd}\"\n正在执行，请稍候...\n"
-        )
+        # 回显命令（终端风格追加）
+        self.adv_log_view.appendPlainText(f"\n$ {cmd}")
+        self.term_input.clear()
+        self.term_input.setEnabled(False)
         QApplication.processEvents()
 
         # 同步执行（超时 2 小时，适合长任务如大软件包下载）
         ok, output = env.run_in_env(cmd, timeout=7200)
-        display = f"$ conda run -n {env.env_name} bash -c \"{cmd}\"\n\n{output}"
+        self.adv_log_view.appendPlainText(output if output.strip() else "(无输出)")
         if not ok:
-            display += "\n\n[命令执行失败，退出码非0]"
-        self.adv_log_view.setPlainText(display)
+            self.adv_log_view.appendPlainText("[命令执行失败，退出码非0]")
+        # 滚动到底部
+        self.adv_log_view.moveCursor(QTextCursor.End)
 
-        self.term_run_btn.setEnabled(True)
-        self.term_edit.setEnabled(True)
+        self.term_input.setEnabled(True)
+        self.term_input.setFocus()
 
         # 命令执行成功后，尝试刷新表格中的版本信息
         if ok:
