@@ -44,7 +44,7 @@ from .env_manager import (
 )
 from .steps import PIPELINE_STEPS, StepStatus, AnalysisContext, SampleInfo
 from .pipeline import AnalysisWorker
-from .terminal_panel import TerminalPanel
+from .terminal_panel import TerminalPanel, launch_system_terminal
 from . import __version__
 
 
@@ -481,7 +481,7 @@ class EnvSetupPage(QWidget):
             self.uninstall_all_btn, self.retry_btn,
         ):
             w.setEnabled(ready)
-        # 终端面板的启用由 set_env_manager() 管理（环境就绪时激活）
+        # 终端面板的启用由 set_env_ready() 管理（环境就绪时激活）
 
     def _setup_ui(self):
         # 外层滚动区域（解决窗口小内容被挤压的问题）
@@ -673,13 +673,10 @@ class EnvSetupPage(QWidget):
         custom_row.addWidget(self.custom_install_btn)
         adv_layout.addLayout(custom_row)
 
-        # 环境终端：真终端（QTermWidget）优先，回退到兼容模式
+        # 环境终端：调用 UOS 系统终端（原生体验，无卡顿）
         self.term_panel = TerminalPanel()
-        # 兼容模式：单命令执行完成后刷新版本表
-        self.term_panel.command_finished.connect(
-            lambda _ok: self._refresh_versions_from_env()
-        )
-        # 真终端模式：用户点击"刷新已安装版本"按钮
+        self.term_panel.open_terminal_requested.connect(self._open_system_terminal)
+        # 用户点击「刷新已安装版本」按钮
         self.term_panel.refresh_versions_requested.connect(
             self._refresh_versions_from_env
         )
@@ -766,7 +763,7 @@ class EnvSetupPage(QWidget):
                 self.create_env_btn.setText("重建环境")
                 self._env_ready = True
                 self._refresh_env_buttons()
-                self.term_panel.set_env_manager(env, True)
+                self.term_panel.set_env_ready(True)
         elif info == "NEED_INSTALL":
             # 需要自动部署本地 Conda
             self.conda_path_edit.setText(os.path.join(get_local_conda_dir(), "bin", "conda"))
@@ -817,7 +814,7 @@ class EnvSetupPage(QWidget):
             self.conda_status_label.setStyleSheet(f"color: {COLORS['success']}; font-weight: bold;")
             self._env_ready = True
             self._refresh_env_buttons()
-            self.term_panel.set_env_manager(env, True)
+            self.term_panel.set_env_ready(True)
         else:
             self.conda_status_label.setText(f"✗ 创建失败: {msg[:100]}")
             self.conda_status_label.setStyleSheet(f"color: {COLORS['error']};")
@@ -1170,6 +1167,22 @@ class EnvSetupPage(QWidget):
         )
 
 
+    def _open_system_terminal(self):
+        """打开 UOS 系统终端，cd 到工作目录 + conda activate 进入分析环境"""
+        env = self.get_env_manager()
+        work_dir = ""
+        win = self.window()
+        if isinstance(win, MainWindow):
+            work_dir = win.param_page.get_work_dir()
+        ok, msg = launch_system_terminal(env, work_dir)
+        if not ok:
+            QMessageBox.warning(self, "打开终端失败", msg)
+        else:
+            self.term_panel.append_log(
+                f"$ 打开系统终端 ({msg}) — 已进入分析环境"
+                + (f"，工作目录: {work_dir}" if work_dir else "")
+            )
+
     def _refresh_versions_from_env(self):
         """从环境中读取所有已安装包的版本，刷新表格"""
         env = self.get_env_manager()
@@ -1332,6 +1345,12 @@ class ParamConfigPage(QWidget):
         dir_layout.addWidget(self.work_dir_edit)
         dir_layout.addWidget(browse_btn)
         g1.addRow("工作目录:", dir_layout)
+        work_dir_hint = QLabel(
+            "分析结果将输出到此目录下的各子文件夹"
+            "（01_fastqc_out / 02_fastp_clean / 04_trinity_out 等）"
+        )
+        work_dir_hint.setStyleSheet("color: #888; font-size: 11px;")
+        g1.addRow("", work_dir_hint)
 
         self.prefix_edit = QLineEdit()
         self.prefix_edit.setText(self.config.species_prefix)
