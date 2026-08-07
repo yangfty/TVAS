@@ -1,5 +1,1 @@
 PyQt5>=5.15
-
-# 真终端依赖（仅 Linux/UOS 需要，pip 无法安装，用系统包管理器）：
-#   UOS/Debian/Ubuntu: sudo apt install python3-pyqt5.qtermwidget
-# 未安装时自动回退到兼容模式（QPlainTextEdit 单命令执行），不影响使用。

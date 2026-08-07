@@ -9,12 +9,12 @@
 ## [0.1.0] - 2026-08-07
 
 ### 变更
-- **开源协议从 MIT 更改为 GPL v3**：与 PyQt5 / QTermWidget 依赖的协议一致，
-  合规开源发布（原 MIT 标注与 GPL 依赖冲突，GPL 优先）
-- **内置真终端改造**：新增 `rnaseq_app/terminal_panel.py`
-  - 优先 QTermWidget 真终端（颜色 / vim / top / 持久 shell，自动 conda activate）
-  - Windows 开发机自动回退兼容模式（QPlainTextEdit 单命令）
-- UOS 新增依赖 `python3-pyqt5.qtermwidget`
+- **开源协议从 MIT 更改为 GPL v3**：与 PyQt5 依赖的协议一致，合规开源发布
+- **环境终端改用 UOS 系统终端**：点击「打开系统终端」按钮启动 deepin-terminal，
+  自动 conda activate 进入分析环境 + cd 到工作目录
+  - 弃用自建终端（QTermWidget/pty），原生体验无卡顿
+  - 修复命令执行后误触发版本刷新的 bug
+- **工作目录设置加说明**：参数页标注输出到各子文件夹（01_fastqc_out 等）
 - 版本号从 0.0.x 迈入 0.1.0 — 首个公开发布版本
 
 ---

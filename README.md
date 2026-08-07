@@ -88,9 +88,8 @@
 git clone https://github.com/yangfty/TVAS.git
 cd TVAS
 
-# 安装 PyQt5 及真终端组件
+# 安装 PyQt5
 pip install PyQt5 --user
-sudo apt install python3-pyqt5.qtermwidget   # 真终端（可选，未装则自动回退兼容模式）
 
 # 启动
 chmod +x run.sh
