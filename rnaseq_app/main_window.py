@@ -480,9 +480,41 @@ class EnvSetupPage(QWidget):
         self.verify_btn = QPushButton("验证安装")
         self.verify_btn.clicked.connect(self._verify_packages)
         self.verify_btn.setEnabled(False)
+        self.uninstall_btn = QPushButton("卸载选中软件包")
+        self.uninstall_btn.clicked.connect(lambda: self._uninstall_package())
+        self.uninstall_btn.setEnabled(False)
+        self.uninstall_btn.setToolTip("在表格中选中一行（可多选），点击后仅卸载选中的软件包")
+        self.uninstall_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {COLORS['danger_btn']};
+                color: white;
+                padding: 8px 20px;
+                border-radius: 4px;
+                font-weight: bold;
+            }}
+            QPushButton:hover {{ background-color: #c0392b; }}
+            QPushButton:disabled {{ background-color: #bdc3c7; }}
+        """)
+        self.uninstall_all_btn = QPushButton("🗑 卸载全部（删除环境重建）")
+        self.uninstall_all_btn.clicked.connect(self._uninstall_all)
+        self.uninstall_all_btn.setEnabled(False)
+        self.uninstall_all_btn.setToolTip("删除整个分析环境并清空，之后需重新创建环境并安装软件")
+        self.uninstall_all_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: #8e44ad;
+                color: white;
+                padding: 8px 20px;
+                border-radius: 4px;
+                font-weight: bold;
+            }}
+            QPushButton:hover {{ background-color: #732d91; }}
+            QPushButton:disabled {{ background-color: #bdc3c7; }}
+        """)
         pkg_btn_layout.addWidget(self.install_btn)
         pkg_btn_layout.addWidget(self.retry_btn)
         pkg_btn_layout.addWidget(self.verify_btn)
+        pkg_btn_layout.addWidget(self.uninstall_btn)
+        pkg_btn_layout.addWidget(self.uninstall_all_btn)
         pkg_btn_layout.addStretch()
         g2_layout.addLayout(pkg_btn_layout)
 
@@ -660,6 +692,8 @@ class EnvSetupPage(QWidget):
                 self.verify_btn.setEnabled(True)
                 self.custom_install_btn.setEnabled(True)
                 self.term_run_btn.setEnabled(True)
+                self.uninstall_btn.setEnabled(True)
+                self.uninstall_all_btn.setEnabled(True)
         elif info == "NEED_INSTALL":
             # 需要自动部署本地 Conda
             self.conda_path_edit.setText(os.path.join(get_local_conda_dir(), "bin", "conda"))
@@ -713,6 +747,8 @@ class EnvSetupPage(QWidget):
             self.verify_btn.setEnabled(True)
             self.custom_install_btn.setEnabled(True)
             self.term_run_btn.setEnabled(True)
+            self.uninstall_btn.setEnabled(True)
+            self.uninstall_all_btn.setEnabled(True)
         else:
             self.conda_status_label.setText(f"✗ 创建失败: {msg[:100]}")
             self.conda_status_label.setStyleSheet(f"color: {COLORS['error']};")
@@ -841,6 +877,121 @@ class EnvSetupPage(QWidget):
             if ver:
                 self.pkg_table.item(row, 1).setText(ver)
         QMessageBox.information(self, "验证完成", "软件包验证完成，请查看表格中的状态。")
+
+    # ---- 卸载 ----
+
+    def _uninstall_package(self):
+        """卸载选中的软件包"""
+        rows = sorted(set(idx.row() for idx in self.pkg_table.selectedIndexes()))
+        if not rows:
+            QMessageBox.information(self, "提示", "请先在表格中选中要卸载的软件包（可按住 Ctrl 多选）")
+            return
+
+        pkg_names = []
+        for row in rows:
+            pkg_item = self.pkg_table.item(row, 0)
+            if pkg_item:
+                pkg_names.append(pkg_item.text().strip())
+
+        reply = QMessageBox.question(
+            self, "确认卸载",
+            f"确定要卸载以下软件包吗？\n\n{chr(10).join(pkg_names)}",
+            QMessageBox.Yes | QMessageBox.No
+        )
+        if reply != QMessageBox.Yes:
+            return
+
+        env = self.get_env_manager()
+        self.uninstall_btn.setEnabled(False)
+        QApplication.processEvents()
+
+        results = []
+        for row in rows:
+            pkg_item = self.pkg_table.item(row, 0)
+            if not pkg_item:
+                continue
+            pkg_name = pkg_item.text().strip()
+            status_item = self.pkg_table.item(row, 3)
+            if status_item:
+                status_item.setText("卸载中...")
+                status_item.setForeground(QColor(COLORS["running"]))
+            QApplication.processEvents()
+
+            success, msg = env.uninstall_package(pkg_name)
+            results.append((pkg_name, success, msg))
+
+            # 卸载成功后清空版本和状态
+            if success:
+                ver_item = self.pkg_table.item(row, 1)
+                if ver_item:
+                    ver_item.setText("")
+                if status_item:
+                    status_item.setText("未安装")
+                    status_item.setForeground(QColor("#7f8c8d"))
+            else:
+                if status_item:
+                    status_item.setText("✗ 卸载失败")
+                    status_item.setForeground(QColor(COLORS["error"]))
+            QApplication.processEvents()
+
+        self.uninstall_btn.setEnabled(True)
+
+        ok_count = sum(1 for _, s, _ in results if s)
+        QMessageBox.information(
+            self, "卸载完成",
+            f"卸载完成\n成功: {ok_count}/{len(results)}"
+        )
+
+    def _uninstall_all(self):
+        """卸载全部：直接删除整个环境（最干净）"""
+        reply = QMessageBox.question(
+            self, "确认删除环境",
+            "此操作将删除整个分析环境（等同卸载全部软件包，包括 Python 和所有依赖）。\n\n"
+            "删除后需要重新「创建环境」并重新安装软件包。\n"
+            "确定继续吗？",
+            QMessageBox.Yes | QMessageBox.No
+        )
+        if reply != QMessageBox.Yes:
+            return
+
+        env = self.get_env_manager()
+        self.uninstall_all_btn.setEnabled(False)
+        QApplication.processEvents()
+
+        ok, msg = env.remove_env()
+
+        if ok:
+            # 重置表格：清空版本和状态
+            for row in range(self.pkg_table.rowCount()):
+                ver_item = self.pkg_table.item(row, 1)
+                if ver_item:
+                    ver_item.setText("")
+                status_item = self.pkg_table.item(row, 3)
+                if status_item:
+                    status_item.setText("未安装")
+                    status_item.setForeground(QColor("#7f8c8d"))
+
+            # 环境已删除，恢复初始按钮状态
+            self.install_btn.setEnabled(False)
+            self.retry_btn.setEnabled(False)
+            self.verify_btn.setEnabled(False)
+            self.custom_install_btn.setEnabled(False)
+            self.term_run_btn.setEnabled(False)
+            self.create_env_btn.setText("创建环境")
+            self.create_env_btn.setEnabled(True)
+            self.conda_status_label.setText("✓ 环境已删除，点击「创建环境」重新创建")
+            self.conda_status_label.setStyleSheet(f"color: {COLORS['warning']}; font-weight: bold;")
+
+            QMessageBox.information(
+                self, "环境已删除",
+                "分析环境已删除。\n\n"
+                "接下来请点击「创建环境」重新创建环境，"
+                "然后「安装全部软件包」。"
+            )
+        else:
+            QMessageBox.warning(self, "删除失败", msg)
+
+        self.uninstall_all_btn.setEnabled(True)
 
     # ---- 高级设置 ----
 

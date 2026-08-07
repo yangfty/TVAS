@@ -430,6 +430,31 @@ class CondaEnvManager:
             pass
         return ""
 
+    def uninstall_package(self, pkg_name: str) -> Tuple[bool, str]:
+        """卸载环境中的单个软件包"""
+        cmd = [self._conda_exe, "remove", "-n", self.env_name, "-y", pkg_name]
+        rc, out, err = self._exec(cmd, 600)
+        self.pkg_logs[pkg_name] = self.last_log
+        if rc == 0:
+            return True, f"✓ {pkg_name} 卸载成功"
+        if "packages not found" in (out + err).lower() or "no packages" in (out + err).lower():
+            return True, f"✓ {pkg_name} 未安装（无需卸载）"
+        detail = (err or out)[-300:]
+        advice = self.analyze_error(err or out)
+        msg = f"✗ {pkg_name} 卸载失败: {detail}"
+        if advice:
+            msg += f"\n\n{advice}"
+        return False, msg
+
+    def remove_env(self) -> Tuple[bool, str]:
+        """删除整个分析环境（等同卸载全部，最干净）"""
+        cmd = [self._conda_exe, "env", "remove", "-n", self.env_name, "-y"]
+        rc, out, err = self._exec(cmd, 300)
+        if rc == 0:
+            self.pkg_logs.clear()
+            return True, f"环境 '{self.env_name}' 已删除"
+        return False, f"删除失败: {(err or out)[-300:]}"
+
     @staticmethod
     def analyze_error(err_text: str) -> str:
         """分析 conda 错误信息，返回中文排查建议（无匹配返回空）"""

@@ -21,7 +21,7 @@ cd "$SCRIPT_DIR"
 if [ -f VERSION ]; then
     VERSION=$(cat VERSION | tr -d '[:space:]')
 else
-    VERSION="0.0.12"
+    VERSION="0.0.13"
 fi
 
 APP_NAME="转录组DeNovo组装"
