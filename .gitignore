@@ -54,3 +54,4 @@ rnaseq_config.json
 # Temporary files
 *.tmp
 *.temp
+*.bak

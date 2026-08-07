@@ -1,6 +1,6 @@
 # RNA-seq De Novo Assembly GUI
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![License: GPL v3](https://img.shields.io/badge/License-GPL_v3-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-UOS%20%7C%20Debian%20%7C%20Ubuntu-blue)]()
 
 > **转录组测序数据 De Novo 组装分析桌面软件**  
@@ -14,6 +14,7 @@
 
 - **图形化界面** — PyQt5 桌面应用，无需命令行操作
 - **一键环境搭建** — 自动创建 Conda 虚拟环境并安装所有生物信息学软件
+- **内置真终端** — 集成 QTermWidget 真终端，可直接在分析环境里运行 conda 命令、vim、top 等交互程序
 - **完整分析流程** — 11 步标准 de novo 转录组组装流程
 - **实时监控** — 彩色日志输出、步骤状态指示灯、整体进度条
 - **后台执行** — 多线程不阻塞界面，支持随时停止
@@ -87,8 +88,9 @@
 git clone https://github.com/yangfty/TVAS.git
 cd TVAS
 
-# 安装 PyQt5
+# 安装 PyQt5 及真终端组件
 pip install PyQt5 --user
+sudo apt install python3-pyqt5.qtermwidget   # 真终端（可选，未装则自动回退兼容模式）
 
 # 启动
 chmod +x run.sh
@@ -156,6 +158,7 @@ TVAS/
 │   ├── steps.py                # 11 个分析步骤
 │   ├── pipeline.py             # 流程编排 + 后台线程
 │   ├── main_window.py          # PyQt5 主界面
+│   ├── terminal_panel.py       # 环境终端面板（QTermWidget 真终端 / 兼容回退）
 │   └── resources/              # 图标、desktop 文件
 ├── scripts/                    # 辅助脚本 (序列/GFF3 重命名)
 ├── debian/                     # Debian 打包规范

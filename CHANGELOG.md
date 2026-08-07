@@ -6,6 +6,19 @@
 
 ---
 
+## [0.1.0] - 2026-08-07
+
+### 变更
+- **开源协议从 MIT 更改为 GPL v3**：与 PyQt5 / QTermWidget 依赖的协议一致，
+  合规开源发布（原 MIT 标注与 GPL 依赖冲突，GPL 优先）
+- **内置真终端改造**：新增 `rnaseq_app/terminal_panel.py`
+  - 优先 QTermWidget 真终端（颜色 / vim / top / 持久 shell，自动 conda activate）
+  - Windows 开发机自动回退兼容模式（QPlainTextEdit 单命令）
+- UOS 新增依赖 `python3-pyqt5.qtermwidget`
+- 版本号从 0.0.x 迈入 0.1.0 — 首个公开发布版本
+
+---
+
 ## [0.0.19] - 2026-08-07
 
 ### 新增

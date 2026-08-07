@@ -1,13 +1,9 @@
-tvas (1.0.0) unstable; urgency=medium
+tvas (0.1.0) unstable; urgency=medium
 
-  * 初始版本发布
+  * 开源协议变更为 GPL v3（与 PyQt5 / QTermWidget 依赖一致）
+  * 内置真终端：QTermWidget 优先 + 兼容回退 (terminal_panel.py)
+  * 版本号规范化为 0.1.0 — 首个公开发布版本
   * 完整的 11 步转录组 de novo 组装流程
-  * PyQt5 图形化桌面界面
-  * Conda 虚拟环境自动管理
-  * 一键安装所有生物信息学软件
-  * 样本表格管理 (手动添加 / 文件导入)
-  * 实时日志输出、步骤状态指示、进度条
-  * 配置文件 JSON 保存/加载
-  * 支持 Debian 打包和 UOS 应用商店发布
+  * PyQt5 图形化桌面界面 + Conda 环境自动管理
 
- -- RNA-seq Analysis Tools <dev@example.com>  Tue, 04 Aug 2026 14:00:00 +0800
+ -- RNA-seq Analysis Tools <dev@example.com>  Fri, 07 Aug 2026 15:00:00 +0800

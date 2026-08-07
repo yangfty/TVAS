@@ -44,6 +44,7 @@ from .env_manager import (
 )
 from .steps import PIPELINE_STEPS, StepStatus, AnalysisContext, SampleInfo
 from .pipeline import AnalysisWorker
+from .terminal_panel import TerminalPanel
 from . import __version__
 
 
@@ -136,170 +137,6 @@ class EnvTaskWorker(QThread):
                 self.done.emit(bool(result), "")
         except Exception as e:
             self.done.emit(False, f"执行出错: {e}")
-
-
-class TerminalWorker(QThread):
-    """
-    基于 pty 伪终端的实时终端工作线程。
-    - 实时流式输出（不用等命令结束）
-    - 支持向运行中的进程发送输入（conda 确认 y/n 等交互）
-    - 结束通过 terminated(bool, msg) 回传
-    """
-
-    output = pyqtSignal(str)            # 实时输出文本
-    terminated = pyqtSignal(bool, str)  # (成功, 退出消息)
-
-    def __init__(self, bash_exe: str, cmd: str, parent=None):
-        super().__init__(parent)
-        self._bash_exe = bash_exe
-        self._cmd = cmd
-        self._master = None
-        self._proc = None
-        self._stop = False
-
-    def send_input(self, text: str):
-        """向运行中的进程发送输入（回车自动补）"""
-        if self._master is not None and self._proc and self._proc.poll() is None:
-            try:
-                os.write(self._master, (text + "\n").encode())
-                return True
-            except OSError:
-                pass
-        return False
-
-    def request_stop(self):
-        self._stop = True
-
-    def run(self):
-        try:
-            import pty
-            import select
-        except ImportError:
-            # 无 pty 平台（如 Windows 开发机）：退化为一次性捕获
-            self._run_plain()
-            return
-
-        try:
-            master, slave = pty.openpty()
-            self._master = master
-            self._proc = subprocess.Popen(
-                [self._bash_exe, "-c", self._cmd],
-                stdin=slave, stdout=slave, stderr=slave,
-                close_fds=True,
-            )
-            os.close(slave)
-
-            buf = b""
-            while True:
-                if self._stop:
-                    self._proc.terminate()
-                    break
-                r, _, _ = select.select([master], [], [], 0.3)
-                if r:
-                    try:
-                        data = os.read(master, 4096)
-                    except OSError:
-                        break
-                    if not data:
-                        break
-                    buf += data
-                    # 按完整行发射，保证逐行实时刷新
-                    while b"\n" in buf:
-                        line, buf = buf.split(b"\n", 1)
-                        self.output.emit(line.decode(errors="replace"))
-                if self._proc.poll() is not None:
-                    # 读尽剩余输出
-                    try:
-                        while True:
-                            r, _, _ = select.select([master], [], [], 0)
-                            if not r:
-                                break
-                            data = os.read(master, 4096)
-                            if not data:
-                                break
-                            buf += data
-                    except OSError:
-                        pass
-                    break
-
-            if buf:
-                self.output.emit(buf.decode(errors="replace"))
-            os.close(master)
-            self._master = None
-            rc = self._proc.returncode
-            self.terminated.emit(rc == 0, f"exit={rc}")
-        except Exception as e:
-            self.terminated.emit(False, f"终端错误: {e}")
-
-    def _run_plain(self):
-        """无 pty 平台的退化实现：一次性捕获输出"""
-        try:
-            self._proc = subprocess.Popen(
-                [self._bash_exe, "-c", self._cmd],
-                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                text=True,
-            )
-            out, _ = self._proc.communicate()
-            if out:
-                self.output.emit(out)
-            rc = self._proc.returncode
-            self.terminated.emit(rc == 0, f"exit={rc}")
-        except Exception as e:
-            self.terminated.emit(False, f"终端错误: {e}")
-
-
-class TermInput(QLineEdit):
-    """带命令历史 + Tab 补全请求的终端输入框"""
-
-    tab_pressed = pyqtSignal(str)  # 携带当前输入文本，由外部完成补全
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self._history: List[str] = []
-        self._idx = -1
-
-    def keyPressEvent(self, event):
-        if event.key() == Qt.Key_Tab:
-            # 发出补全请求（不切换焦点）
-            self.tab_pressed.emit(self.text())
-            return
-        if event.key() == Qt.Key_Up:
-            if self._history and self._idx > 0:
-                self._idx -= 1
-                self.setText(self._history[self._idx])
-            elif self._history:
-                self._idx = 0
-                self.setText(self._history[0])
-            return
-        if event.key() == Qt.Key_Down:
-            if self._idx >= 0:
-                self._idx += 1
-                if self._idx < len(self._history):
-                    self.setText(self._history[self._idx])
-                else:
-                    self._idx = len(self._history)
-                    self.clear()
-            return
-        super().keyPressEvent(event)
-
-    def commit_command(self, text: str):
-        """记录命令到历史"""
-        text = text.strip()
-        if text:
-            self._history.append(text)
-            if len(self._history) > 200:  # 限制历史长度
-                self._history.pop(0)
-        self._idx = len(self._history)
-        self.clear()
-
-
-# conda 常用子命令（用于 Tab 补全）
-CONDA_SUBCOMMANDS = [
-    "activate", "create", "install", "update", "remove", "uninstall",
-    "list", "search", "info", "config", "clean", "env", "run",
-    "init", "build", "package", "verify", "compare", "convert",
-    "debug", "develop", "help", "inspect", "render",
-]
 
 
 # ============================================================
@@ -589,7 +426,6 @@ class EnvSetupPage(QWidget):
         self.env_manager: Optional[CondaEnvManager] = None
         self._env_ready = False       # 环境是否就绪（决定按钮可用性）
         self._env_worker = None       # 后台任务线程引用（防 GC）
-        self._term_worker = None      # 终端 pty 线程引用
         self._verify_results = []     # 验证结果缓存（后台线程回传）
         self._install_results = []    # 安装结果缓存
         self._setup_ui()
@@ -622,17 +458,19 @@ class EnvSetupPage(QWidget):
                 win.statusBar().showMessage(f"⏳ {label}，请稍候...")
             for w in (
                 self.install_btn, self.verify_btn, self.more_btn,
-                self.custom_install_btn, self.term_input,
+                self.custom_install_btn,
                 self.uninstall_btn, self.uninstall_all_btn,
                 self.retry_btn, self.create_env_btn, self.detect_btn,
             ):
                 w.setEnabled(False)
+            self.term_panel.set_busy(True)
         else:
             QApplication.restoreOverrideCursor()
             win = self.window()
             if isinstance(win, QMainWindow):
                 win.statusBar().showMessage("就绪")
             self._refresh_env_buttons()
+            self.term_panel.set_busy(False)
 
     def _refresh_env_buttons(self):
         """根据环境就绪状态刷新所有操作按钮"""
@@ -643,7 +481,7 @@ class EnvSetupPage(QWidget):
             self.uninstall_all_btn, self.retry_btn,
         ):
             w.setEnabled(ready)
-        self.term_input.setEnabled(ready)
+        # 终端面板的启用由 set_env_manager() 管理（环境就绪时激活）
 
     def _setup_ui(self):
         # 外层滚动区域（解决窗口小内容被挤压的问题）
@@ -835,68 +673,17 @@ class EnvSetupPage(QWidget):
         custom_row.addWidget(self.custom_install_btn)
         adv_layout.addLayout(custom_row)
 
-        # 环境终端：视觉一体的终端容器（输出区 + 输入行在同一黑底框内）
-        term_title = QLabel("环境终端（命令在分析环境中执行，回车运行，上下键翻历史）")
-        term_title.setStyleSheet("color: #555; font-weight: bold;")
-        adv_layout.addWidget(term_title)
-
-        term_box = QFrame()
-        term_box.setStyleSheet("""
-            QFrame {
-                background-color: #1e1e1e;
-                border: 1px solid #333;
-                border-radius: 6px;
-            }
-        """)
-        term_box_layout = QVBoxLayout(term_box)
-        term_box_layout.setContentsMargins(8, 8, 8, 8)
-        term_box_layout.setSpacing(4)
-
-        self.adv_log_view = QPlainTextEdit()
-        self.adv_log_view.setReadOnly(True)
-        self.adv_log_view.setMinimumHeight(200)
-        self.adv_log_view.setPlaceholderText(
-            "这是一个内置小终端，直接输入命令操作分析环境，例如：\n"
-            "  conda list                            # 查看已安装软件包\n"
-            "  conda install -c bioconda trinity=2.15  # 安装 Trinity\n"
-            "  Trinity --version                     # 查看版本\n"
-            "执行中可继续输入内容发送给命令（如 conda 询问 y/n 时输入 y 回车）"
+        # 环境终端：真终端（QTermWidget）优先，回退到兼容模式
+        self.term_panel = TerminalPanel()
+        # 兼容模式：单命令执行完成后刷新版本表
+        self.term_panel.command_finished.connect(
+            lambda _ok: self._refresh_versions_from_env()
         )
-        self.adv_log_view.setStyleSheet("""
-            QPlainTextEdit {
-                background-color: transparent;
-                color: #d4d4d4;
-                font-family: "Consolas", "DejaVu Sans Mono", monospace;
-                font-size: 12px;
-                border: none;
-            }
-        """)
-        term_box_layout.addWidget(self.adv_log_view)
-
-        term_input_row = QHBoxLayout()
-        term_input_row.setSpacing(6)
-        prompt = QLabel("$")
-        prompt.setStyleSheet(f"color: {COLORS['success']}; font-weight: bold; font-size: 14px;")
-        term_input_row.addWidget(prompt)
-        self.term_input = TermInput()
-        self.term_input.setPlaceholderText("输入命令后按回车执行，Tab 键自动补全...")
-        self.term_input.returnPressed.connect(self._on_terminal_enter)
-        self.term_input.tab_pressed.connect(self._on_terminal_tab)
-        self.term_input.setEnabled(False)
-        self.term_input.setStyleSheet("""
-            QLineEdit {
-                background-color: transparent;
-                color: #d4d4d4;
-                font-family: "Consolas", "DejaVu Sans Mono", monospace;
-                font-size: 12px;
-                border: none;
-                padding: 2px 0;
-            }
-        """)
-        term_input_row.addWidget(self.term_input, 1)
-        term_box_layout.addLayout(term_input_row)
-
-        adv_layout.addWidget(term_box)
+        # 真终端模式：用户点击"刷新已安装版本"按钮
+        self.term_panel.refresh_versions_requested.connect(
+            self._refresh_versions_from_env
+        )
+        adv_layout.addWidget(self.term_panel)
 
         # 日志快捷按钮
         log_row = QHBoxLayout()
@@ -979,6 +766,7 @@ class EnvSetupPage(QWidget):
                 self.create_env_btn.setText("重建环境")
                 self._env_ready = True
                 self._refresh_env_buttons()
+                self.term_panel.set_env_manager(env, True)
         elif info == "NEED_INSTALL":
             # 需要自动部署本地 Conda
             self.conda_path_edit.setText(os.path.join(get_local_conda_dir(), "bin", "conda"))
@@ -1029,6 +817,7 @@ class EnvSetupPage(QWidget):
             self.conda_status_label.setStyleSheet(f"color: {COLORS['success']}; font-weight: bold;")
             self._env_ready = True
             self._refresh_env_buttons()
+            self.term_panel.set_env_manager(env, True)
         else:
             self.conda_status_label.setText(f"✗ 创建失败: {msg[:100]}")
             self.conda_status_label.setStyleSheet(f"color: {COLORS['error']};")
@@ -1317,7 +1106,7 @@ class EnvSetupPage(QWidget):
 
         env = self.get_env_manager()
         self._set_env_busy(True, f"正在安装 {spec}")
-        self.adv_log_view.appendPlainText(f"\n$ 自定义安装: {spec}")
+        self.term_panel.append_log(f"\n$ 自定义安装: {spec}")
 
         def task_fn():
             return env.install_custom_package(spec)
@@ -1326,7 +1115,7 @@ class EnvSetupPage(QWidget):
 
     def _on_custom_install_done(self, ok, msg, base_name):
         env = self.get_env_manager()
-        self.adv_log_view.appendPlainText(env.last_log or msg)
+        self.term_panel.append_log(env.last_log or msg)
 
         # 把自定义包加入表格（已存在则更新版本/状态）
         ver = env.get_package_version(base_name) if ok else ""
@@ -1368,151 +1157,18 @@ class EnvSetupPage(QWidget):
             lines.append(f"===== {pkg_name} 最近一次安装日志 =====\n")
             lines.append(env.get_package_log(pkg_name))
             lines.append("")
-        self.adv_log_view.setPlainText("\n".join(lines))
+        self.term_panel.show_log("\n".join(lines))
 
     def _view_last_log(self):
         """查看最近一次 conda 命令的完整输出"""
         env = self.get_env_manager()
         if not env.last_log:
-            self.adv_log_view.setPlainText("（暂无命令记录，请先执行安装/验证操作）")
+            self.term_panel.show_log("（暂无命令记录，请先执行安装/验证操作）")
             return
-        self.adv_log_view.setPlainText(
+        self.term_panel.show_log(
             f"$ {env.last_cmd}\n\n{env.last_log}"
         )
 
-    # ---- 环境终端（pty 实时终端） ----
-
-    def _term_bash_exe(self) -> str:
-        """获取分析环境中的 bash 路径（等同 conda run）"""
-        env = self.get_env_manager()
-        env_path = env.get_env_path()
-        if env_path and os.path.isdir(env_path):
-            bash = os.path.join(env_path, "bin", "bash")
-            if os.path.isfile(bash):
-                return bash
-        return "/bin/bash"
-
-    def _on_terminal_enter(self):
-        """输入框回车：空闲时执行命令，运行中则发送输入给进程（交互确认）"""
-        text = self.term_input.text()
-        if self._term_worker is not None and self._term_worker.isRunning():
-            # 运行中：把输入发给进程（如 conda 询问 y/n）
-            if text.strip():
-                if self._term_worker.send_input(text.strip()):
-                    self.adv_log_view.appendPlainText(f"  ↳ 已发送: {text.strip()}")
-                else:
-                    self.adv_log_view.appendPlainText("  ↳ 发送失败（进程已结束）")
-            self.term_input.clear()
-            return
-
-        cmd = text.strip()
-        if not cmd:
-            return
-
-        env = self.get_env_manager()
-        # 回显命令（终端风格）
-        self.adv_log_view.appendPlainText(f"$ {cmd}")
-        self.term_input.commit_command(cmd)
-        self.term_input.setEnabled(False)
-        self._set_env_busy(True, f"正在执行命令: {cmd[:40]}")
-
-        worker = TerminalWorker(self._term_bash_exe(), cmd)
-        worker.output.connect(self._on_terminal_output)
-        worker.terminated.connect(self._on_terminal_done)
-        self._term_worker = worker
-        worker.start()
-
-    @pyqtSlot(str)
-    def _on_terminal_output(self, text: str):
-        """实时输出追加到终端区"""
-        self.adv_log_view.appendPlainText(text)
-        self.adv_log_view.moveCursor(QTextCursor.End)
-
-    @pyqtSlot(bool, str)
-    def _on_terminal_done(self, ok, msg):
-        # 先清空忙碌状态（恢复按钮），再补结束标记
-        self._set_env_busy(False)
-        self.adv_log_view.appendPlainText(f"[进程结束 {msg}]")
-        self.adv_log_view.moveCursor(QTextCursor.End)
-        self.term_input.setFocus()
-        if ok:
-            self._refresh_versions_from_env()
-        self._term_worker = None
-
-    # ---- Tab 自动补全 ----
-
-    @pyqtSlot(str)
-    def _on_terminal_tab(self, text: str):
-        """Tab 补全：命令 / conda 子命令 / 文件路径"""
-        # 命令运行中不响应 Tab（避免干扰）
-        if self._term_worker is not None and self._term_worker.isRunning():
-            return
-
-        before = text[:self.term_input.cursorPosition()]
-        after = text[self.term_input.cursorPosition():]
-        words = before.split()
-        if not words:
-            return
-        token = words[-1]
-
-        candidates = self._get_tab_candidates(words, token)
-        if not candidates:
-            return
-
-        candidates = sorted(set(candidates))
-
-        if len(candidates) == 1:
-            self._apply_completion(before, after, token, candidates[0] + " ")
-        else:
-            # 找公共前缀
-            common = os.path.commonprefix(candidates)
-            if len(common) > len(token):
-                self._apply_completion(before, after, token, common)
-            else:
-                # 无公共前缀：终端风格显示候选
-                self.adv_log_view.appendPlainText(
-                    "  候选: " + "  ".join(candidates)
-                )
-                self.adv_log_view.moveCursor(QTextCursor.End)
-
-    def _get_tab_candidates(self, words: List[str], token: str) -> List[str]:
-        """获取补全候选列表"""
-        candidates = []
-        bash = self._term_bash_exe()
-
-        if len(words) <= 1:
-            # 命令位置：compgen -c 补全命令
-            out = self._run_compgen(bash, "c", token)
-            candidates += out
-        else:
-            # 参数位置
-            if words[0] == "conda" and len(words) == 2:
-                # conda 子命令补全
-                candidates += [
-                    sub for sub in CONDA_SUBCOMMANDS if sub.startswith(token)
-                ]
-            # 文件/目录补全
-            candidates += self._run_compgen(bash, "f", token)
-        return candidates
-
-    @staticmethod
-    def _run_compgen(bash: str, kind: str, token: str) -> List[str]:
-        """在环境中执行 compgen 查询补全候选"""
-        try:
-            out = subprocess.run(
-                [bash, "-c", f'compgen -{kind} -- "{token}" 2>/dev/null'],
-                capture_output=True, text=True, timeout=5,
-            )
-            return [line for line in out.stdout.splitlines() if line]
-        except Exception:
-            return []
-
-    def _apply_completion(self, before: str, after: str, token: str, replacement: str):
-        """应用补全结果到输入框"""
-        head = before[:len(before) - len(token)]
-        new_text = head + replacement + after
-        self.term_input.setText(new_text)
-        self.term_input.setCursorPosition(len(head) + len(replacement))
 
     def _refresh_versions_from_env(self):
         """从环境中读取所有已安装包的版本，刷新表格"""
