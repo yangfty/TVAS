@@ -6,6 +6,19 @@
 
 ---
 
+## [0.0.15] - 2026-08-07
+
+### 重构 (代码精简，功能不变)
+- **main_window.py**：删除 13 个未使用 import；三处重复的 `_group_style` 合并为模块级函数；删除冗余的「运行当前步骤」按钮（与运行全部功能重复）；删除空 progress_callback
+- **config.py**：删除未使用的 packages/output_structure/raw_data_dir 配置键，及 all()/get_output_dir()/packages()/raw_data_dir 方法
+- **env_manager.py**：删除未使用的 run_script()/summarize()/is_required
+- **steps.py**：删除顶层未使用的 import glob
+- **pipeline.py**：删除未使用的 11 个 step_* 函数 import（步骤通过注册表调用）
+- **删除冗余文件**：`scripts/ifdos2unix.py`（功能已内联到步骤中）、`install.sh`（已被 deb 包安装替代）
+- 净减约 380 行代码
+
+---
+
 ## [0.0.14] - 2026-08-07
 
 ### 改进
