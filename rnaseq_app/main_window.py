@@ -32,6 +32,7 @@ from PyQt5.QtWidgets import (
     QTableWidget, QTableWidgetItem, QHeaderView, QCheckBox, QGroupBox,
     QFormLayout, QGridLayout, QSizePolicy, QAbstractItemView,
     QPlainTextEdit, QStatusBar, QMenuBar, QAction, QStyle, QScrollArea,
+    QMenu,
 )
 from PyQt5.QtCore import Qt, QTimer, pyqtSlot, pyqtSignal
 from PyQt5.QtGui import QFont, QColor, QTextCursor, QIcon, QPalette
@@ -447,74 +448,78 @@ class EnvSetupPage(QWidget):
         self._populate_pkg_table()
         g2_layout.addWidget(self.pkg_table)
 
+        # 主操作按钮行（次要操作收纳在「更多操作」菜单中）
         pkg_btn_layout = QHBoxLayout()
-        self.install_btn = QPushButton("安装全部软件包")
+        self.install_btn = QPushButton("▶ 安装全部软件包")
         self.install_btn.clicked.connect(self._install_packages)
         self.install_btn.setEnabled(False)
         self.install_btn.setStyleSheet(f"""
             QPushButton {{
                 background-color: {COLORS['primary_btn']};
                 color: white;
-                padding: 8px 24px;
+                padding: 10px 26px;
                 border-radius: 4px;
                 font-weight: bold;
+                font-size: 14px;
             }}
             QPushButton:hover {{ background-color: {COLORS['primary_btn_hover']}; }}
             QPushButton:disabled {{ background-color: #bdc3c7; }}
         """)
-        self.retry_btn = QPushButton("↻ 重装选中软件包")
-        self.retry_btn.clicked.connect(lambda: self._retry_package())
-        self.retry_btn.setEnabled(False)
-        self.retry_btn.setToolTip("在表格中选中一行（可多选），点击后仅重装选中的软件包")
-        self.retry_btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {COLORS['warning']};
-                color: white;
-                padding: 8px 20px;
-                border-radius: 4px;
-                font-weight: bold;
-            }}
-            QPushButton:hover {{ background-color: #e67e22; }}
-            QPushButton:disabled {{ background-color: #bdc3c7; }}
-        """)
-        self.verify_btn = QPushButton("验证安装")
+        self.verify_btn = QPushButton("✓ 验证安装")
         self.verify_btn.clicked.connect(self._verify_packages)
         self.verify_btn.setEnabled(False)
-        self.uninstall_btn = QPushButton("卸载选中软件包")
-        self.uninstall_btn.clicked.connect(lambda: self._uninstall_package())
-        self.uninstall_btn.setEnabled(False)
+        self.verify_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {COLORS['success']};
+                color: white;
+                padding: 10px 20px;
+                border-radius: 4px;
+                font-weight: bold;
+            }}
+            QPushButton:hover {{ background-color: #219150; }}
+            QPushButton:disabled {{ background-color: #bdc3c7; }}
+        """)
+
+        # 「更多操作」下拉菜单（重装/卸载等次要操作）
+        self.more_menu = QMenu(self)
+        self.retry_btn = QAction("↻ 重装选中软件包", self)
+        self.retry_btn.triggered.connect(lambda: self._retry_package())
+        self.retry_btn.setToolTip("在表格中选中一行（可多选），点击后仅重装选中的软件包")
+        self.retry_btn.setEnabled(False)
+        self.more_menu.addAction(self.retry_btn)
+
+        self.uninstall_btn = QAction("✕ 卸载选中软件包", self)
+        self.uninstall_btn.triggered.connect(lambda: self._uninstall_package())
         self.uninstall_btn.setToolTip("在表格中选中一行（可多选），点击后仅卸载选中的软件包")
-        self.uninstall_btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {COLORS['danger_btn']};
-                color: white;
-                padding: 8px 20px;
-                border-radius: 4px;
-                font-weight: bold;
-            }}
-            QPushButton:hover {{ background-color: #c0392b; }}
-            QPushButton:disabled {{ background-color: #bdc3c7; }}
-        """)
-        self.uninstall_all_btn = QPushButton("🗑 卸载全部（删除环境重建）")
-        self.uninstall_all_btn.clicked.connect(self._uninstall_all)
-        self.uninstall_all_btn.setEnabled(False)
+        self.uninstall_btn.setEnabled(False)
+        self.more_menu.addAction(self.uninstall_btn)
+
+        self.more_menu.addSeparator()
+
+        self.uninstall_all_btn = QAction("🗑 卸载全部（删除环境重建）", self)
+        self.uninstall_all_btn.triggered.connect(self._uninstall_all)
         self.uninstall_all_btn.setToolTip("删除整个分析环境并清空，之后需重新创建环境并安装软件")
-        self.uninstall_all_btn.setStyleSheet(f"""
+        self.uninstall_all_btn.setEnabled(False)
+        self.more_menu.addAction(self.uninstall_all_btn)
+
+        self.more_btn = QPushButton("更多操作 ▾")
+        self.more_btn.setMenu(self.more_menu)
+        self.more_btn.setEnabled(False)
+        self.more_btn.setStyleSheet(f"""
             QPushButton {{
-                background-color: #8e44ad;
+                background-color: #7f8c8d;
                 color: white;
-                padding: 8px 20px;
+                padding: 10px 16px;
                 border-radius: 4px;
                 font-weight: bold;
             }}
-            QPushButton:hover {{ background-color: #732d91; }}
+            QPushButton:hover {{ background-color: #6c7a7a; }}
             QPushButton:disabled {{ background-color: #bdc3c7; }}
         """)
+
         pkg_btn_layout.addWidget(self.install_btn)
-        pkg_btn_layout.addWidget(self.retry_btn)
         pkg_btn_layout.addWidget(self.verify_btn)
-        pkg_btn_layout.addWidget(self.uninstall_btn)
-        pkg_btn_layout.addWidget(self.uninstall_all_btn)
+        pkg_btn_layout.addWidget(self.more_btn)
         pkg_btn_layout.addStretch()
         g2_layout.addLayout(pkg_btn_layout)
 
@@ -523,8 +528,10 @@ class EnvSetupPage(QWidget):
 
         layout.addWidget(group2)
 
-        # ---- 高级设置 ----
-        group3 = QGroupBox("高级设置")
+        # ---- 高级设置（默认折叠，需要时展开） ----
+        group3 = QGroupBox("高级设置（自定义安装 · 环境终端 · 日志）")
+        group3.setCheckable(True)
+        group3.setChecked(False)  # 默认折叠，界面更简洁
         group3.setStyleSheet(self._group_style())
         g3_layout = QVBoxLayout(group3)
 
@@ -694,6 +701,7 @@ class EnvSetupPage(QWidget):
                 self.term_run_btn.setEnabled(True)
                 self.uninstall_btn.setEnabled(True)
                 self.uninstall_all_btn.setEnabled(True)
+                self.more_btn.setEnabled(True)
         elif info == "NEED_INSTALL":
             # 需要自动部署本地 Conda
             self.conda_path_edit.setText(os.path.join(get_local_conda_dir(), "bin", "conda"))
@@ -749,6 +757,7 @@ class EnvSetupPage(QWidget):
             self.term_run_btn.setEnabled(True)
             self.uninstall_btn.setEnabled(True)
             self.uninstall_all_btn.setEnabled(True)
+            self.more_btn.setEnabled(True)
         else:
             self.conda_status_label.setText(f"✗ 创建失败: {msg[:100]}")
             self.conda_status_label.setStyleSheet(f"color: {COLORS['error']};")
@@ -977,6 +986,7 @@ class EnvSetupPage(QWidget):
             self.verify_btn.setEnabled(False)
             self.custom_install_btn.setEnabled(False)
             self.term_run_btn.setEnabled(False)
+            self.more_btn.setEnabled(False)
             self.create_env_btn.setText("创建环境")
             self.create_env_btn.setEnabled(True)
             self.conda_status_label.setText("✓ 环境已删除，点击「创建环境」重新创建")
