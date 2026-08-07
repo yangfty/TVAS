@@ -430,6 +430,34 @@ class CondaEnvManager:
             pass
         return ""
 
+    @staticmethod
+    def analyze_error(err_text: str) -> str:
+        """分析 conda 错误信息，返回中文排查建议（无匹配返回空）"""
+        err = err_text.lower()
+        if "unsatisfiableerror" in err or "found conflicts" in err or "incompatible" in err:
+            return (
+                "检测到依赖冲突 (UnsatisfiableError)。\n"
+                "建议: ① 尝试安装新版, 如 trinity=2.15: "
+                "conda install -c bioconda -c conda-forge trinity=2.15\n"
+                "     ② 或用更快的 mamba 求解器: conda install -n 环境 mamba\n"
+                "     ③ 或清理缓存后重试: conda clean -i -a"
+            )
+        if "packagesnotfound" in err:
+            return (
+                "未找到该软件包/版本。\n"
+                "建议: 去掉版本号安装最新版, 或用 conda search <包名> 查看可用版本。"
+            )
+        if "connect" in err or "timeout" in err or "proxy" in err or "ssl" in err:
+            return (
+                "网络连接问题。\n"
+                "建议: 检查网络/代理设置, 或配置国内镜像源后重试。"
+            )
+        if "disk" in err or "no space" in err:
+            return "磁盘空间不足。\n建议: 清理磁盘后重试 (可用 df -h 查看)。"
+        if "permission denied" in err:
+            return "权限不足。\n建议: 检查应用数据目录 (~/.local/share/TVAS) 的读写权限。"
+        return ""
+
     def install_package(self, pkg: PackageSpec) -> Tuple[bool, str]:
         cmd = [self._conda_exe, "install", "-n", self.env_name, "-y"]
         cmd.extend(["-c", pkg.channel])
@@ -449,7 +477,13 @@ class CondaEnvManager:
             ver = self.get_package_version(pkg.name)
             ver_str = f" (v{ver})" if ver else ""
             return True, f"✓ {pkg.name}{ver_str} (已安装)"
-        return False, f"✗ {pkg.name}: {(err or out)[-300:]}"
+
+        detail = (err or out)[-300:]
+        advice = self.analyze_error(err or out)
+        msg = f"✗ {pkg.name}: {detail}"
+        if advice:
+            msg += f"\n\n{advice}"
+        return False, msg
 
     def install_custom_package(self, spec: str) -> Tuple[bool, str]:
         """
@@ -480,7 +514,13 @@ class CondaEnvManager:
             ver = self.get_package_version(base_name) if base_name else ""
             ver_str = f" (v{ver})" if ver else ""
             return True, f"✓ {spec}{ver_str} (已安装)"
-        return False, f"✗ {spec}: {(err or out)[-500:]}"
+
+        detail = (err or out)[-500:]
+        advice = self.analyze_error(err or out)
+        msg = f"✗ {spec}: {detail}"
+        if advice:
+            msg += f"\n\n{advice}"
+        return False, msg
 
     def get_package_log(self, pkg_name: str) -> str:
         """获取某软件包最近一次安装的完整日志"""

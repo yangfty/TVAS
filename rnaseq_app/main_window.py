@@ -511,6 +511,40 @@ class EnvSetupPage(QWidget):
         custom_row.addWidget(self.custom_install_btn)
         g3_layout.addLayout(custom_row)
 
+        # 环境终端（手动执行任意命令）
+        term_row = QHBoxLayout()
+        term_label = QLabel("环境终端:")
+        term_label.setStyleSheet("color: #555;")
+        term_row.addWidget(term_label)
+        self.term_edit = QLineEdit()
+        self.term_edit.setPlaceholderText(
+            "在分析环境中执行命令，如: conda install -c bioconda trinity=2.15 / which Trinity / trinity --version"
+        )
+        self.term_edit.returnPressed.connect(self._run_terminal_cmd)
+        term_row.addWidget(self.term_edit, 1)
+        self.term_run_btn = QPushButton("执行")
+        self.term_run_btn.clicked.connect(self._run_terminal_cmd)
+        self.term_run_btn.setEnabled(False)
+        self.term_run_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {COLORS['primary_btn']};
+                color: white;
+                padding: 6px 18px;
+                border-radius: 4px;
+                font-weight: bold;
+            }}
+            QPushButton:disabled {{ background-color: #bdc3c7; }}
+        """)
+        term_row.addWidget(self.term_run_btn)
+        g3_layout.addLayout(term_row)
+        term_hint = QLabel(
+            "提示：命令将在分析环境（conda run）中执行，可查看/安装任意软件。"
+            "例如先运行 `conda list` 查看已装包，再运行 `conda install trinity=2.15` 安装新版本。"
+        )
+        term_hint.setWordWrap(True)
+        term_hint.setStyleSheet("color: #95a5a6; font-size: 11px;")
+        g3_layout.addWidget(term_hint)
+
         # 日志区
         log_row = QHBoxLayout()
         log_label = QLabel("conda 命令输出:")
@@ -625,6 +659,7 @@ class EnvSetupPage(QWidget):
                 self.retry_btn.setEnabled(True)
                 self.verify_btn.setEnabled(True)
                 self.custom_install_btn.setEnabled(True)
+                self.term_run_btn.setEnabled(True)
         elif info == "NEED_INSTALL":
             # 需要自动部署本地 Conda
             self.conda_path_edit.setText(os.path.join(get_local_conda_dir(), "bin", "conda"))
@@ -677,6 +712,7 @@ class EnvSetupPage(QWidget):
             self.retry_btn.setEnabled(True)
             self.verify_btn.setEnabled(True)
             self.custom_install_btn.setEnabled(True)
+            self.term_run_btn.setEnabled(True)
         else:
             self.conda_status_label.setText(f"✗ 创建失败: {msg[:100]}")
             self.conda_status_label.setStyleSheet(f"color: {COLORS['error']};")
@@ -881,6 +917,52 @@ class EnvSetupPage(QWidget):
         self.adv_log_view.setPlainText(
             f"$ {env.last_cmd}\n\n{env.last_log}"
         )
+
+    def _run_terminal_cmd(self):
+        """在分析环境中手动执行命令（环境终端）"""
+        cmd = self.term_edit.text().strip()
+        if not cmd:
+            QMessageBox.information(self, "提示", "请输入要执行的命令")
+            return
+
+        env = self.get_env_manager()
+        self.term_run_btn.setEnabled(False)
+        self.term_edit.setEnabled(False)
+        self.adv_log_view.setPlainText(
+            f"$ conda run -n {env.env_name} bash -c \"{cmd}\"\n正在执行，请稍候...\n"
+        )
+        QApplication.processEvents()
+
+        # 同步执行（超时 2 小时，适合长任务如大软件包下载）
+        ok, output = env.run_in_env(cmd, timeout=7200)
+        display = f"$ conda run -n {env.env_name} bash -c \"{cmd}\"\n\n{output}"
+        if not ok:
+            display += "\n\n[命令执行失败，退出码非0]"
+        self.adv_log_view.setPlainText(display)
+
+        self.term_run_btn.setEnabled(True)
+        self.term_edit.setEnabled(True)
+
+        # 命令执行成功后，尝试刷新表格中的版本信息
+        if ok:
+            self._refresh_versions_from_env()
+
+    def _refresh_versions_from_env(self):
+        """从环境中读取所有已安装包的版本，刷新表格"""
+        env = self.get_env_manager()
+        for row in range(self.pkg_table.rowCount()):
+            pkg_item = self.pkg_table.item(row, 0)
+            if not pkg_item:
+                continue
+            pkg_name = pkg_item.text().strip()
+            ver = env.get_package_version(pkg_name)
+            if ver:
+                self.pkg_table.item(row, 1).setText(ver)
+                # 未标记状态的顺带标记
+                status_item = self.pkg_table.item(row, 3)
+                if status_item and status_item.text() in ("未安装", "等待安装..."):
+                    status_item.setText("✓ 已安装")
+                    status_item.setForeground(QColor(COLORS["success"]))
 
 
 # ============================================================
