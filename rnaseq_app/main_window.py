@@ -249,7 +249,9 @@ class TerminalWorker(QThread):
 
 
 class TermInput(QLineEdit):
-    """带命令历史的终端输入框（上下键切换历史）"""
+    """带命令历史 + Tab 补全请求的终端输入框"""
+
+    tab_pressed = pyqtSignal(str)  # 携带当前输入文本，由外部完成补全
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -257,6 +259,10 @@ class TermInput(QLineEdit):
         self._idx = -1
 
     def keyPressEvent(self, event):
+        if event.key() == Qt.Key_Tab:
+            # 发出补全请求（不切换焦点）
+            self.tab_pressed.emit(self.text())
+            return
         if event.key() == Qt.Key_Up:
             if self._history and self._idx > 0:
                 self._idx -= 1
@@ -285,6 +291,15 @@ class TermInput(QLineEdit):
                 self._history.pop(0)
         self._idx = len(self._history)
         self.clear()
+
+
+# conda 常用子命令（用于 Tab 补全）
+CONDA_SUBCOMMANDS = [
+    "activate", "create", "install", "update", "remove", "uninstall",
+    "list", "search", "info", "config", "clean", "env", "run",
+    "init", "build", "package", "verify", "compare", "convert",
+    "debug", "develop", "help", "inspect", "render",
+]
 
 
 # ============================================================
@@ -864,8 +879,9 @@ class EnvSetupPage(QWidget):
         prompt.setStyleSheet(f"color: {COLORS['success']}; font-weight: bold; font-size: 14px;")
         term_input_row.addWidget(prompt)
         self.term_input = TermInput()
-        self.term_input.setPlaceholderText("输入命令后按回车执行...")
+        self.term_input.setPlaceholderText("输入命令后按回车执行，Tab 键自动补全...")
         self.term_input.returnPressed.connect(self._on_terminal_enter)
+        self.term_input.tab_pressed.connect(self._on_terminal_tab)
         self.term_input.setEnabled(False)
         self.term_input.setStyleSheet("""
             QLineEdit {
@@ -1422,6 +1438,81 @@ class EnvSetupPage(QWidget):
         if ok:
             self._refresh_versions_from_env()
         self._term_worker = None
+
+    # ---- Tab 自动补全 ----
+
+    @pyqtSlot(str)
+    def _on_terminal_tab(self, text: str):
+        """Tab 补全：命令 / conda 子命令 / 文件路径"""
+        # 命令运行中不响应 Tab（避免干扰）
+        if self._term_worker is not None and self._term_worker.isRunning():
+            return
+
+        before = text[:self.term_input.cursorPosition()]
+        after = text[self.term_input.cursorPosition():]
+        words = before.split()
+        if not words:
+            return
+        token = words[-1]
+
+        candidates = self._get_tab_candidates(words, token)
+        if not candidates:
+            return
+
+        candidates = sorted(set(candidates))
+
+        if len(candidates) == 1:
+            self._apply_completion(before, after, token, candidates[0] + " ")
+        else:
+            # 找公共前缀
+            common = os.path.commonprefix(candidates)
+            if len(common) > len(token):
+                self._apply_completion(before, after, token, common)
+            else:
+                # 无公共前缀：终端风格显示候选
+                self.adv_log_view.appendPlainText(
+                    "  候选: " + "  ".join(candidates)
+                )
+                self.adv_log_view.moveCursor(QTextCursor.End)
+
+    def _get_tab_candidates(self, words: List[str], token: str) -> List[str]:
+        """获取补全候选列表"""
+        candidates = []
+        bash = self._term_bash_exe()
+
+        if len(words) <= 1:
+            # 命令位置：compgen -c 补全命令
+            out = self._run_compgen(bash, "c", token)
+            candidates += out
+        else:
+            # 参数位置
+            if words[0] == "conda" and len(words) == 2:
+                # conda 子命令补全
+                candidates += [
+                    sub for sub in CONDA_SUBCOMMANDS if sub.startswith(token)
+                ]
+            # 文件/目录补全
+            candidates += self._run_compgen(bash, "f", token)
+        return candidates
+
+    @staticmethod
+    def _run_compgen(bash: str, kind: str, token: str) -> List[str]:
+        """在环境中执行 compgen 查询补全候选"""
+        try:
+            out = subprocess.run(
+                [bash, "-c", f'compgen -{kind} -- "{token}" 2>/dev/null'],
+                capture_output=True, text=True, timeout=5,
+            )
+            return [line for line in out.stdout.splitlines() if line]
+        except Exception:
+            return []
+
+    def _apply_completion(self, before: str, after: str, token: str, replacement: str):
+        """应用补全结果到输入框"""
+        head = before[:len(before) - len(token)]
+        new_text = head + replacement + after
+        self.term_input.setText(new_text)
+        self.term_input.setCursorPosition(len(head) + len(replacement))
 
     def _refresh_versions_from_env(self):
         """从环境中读取所有已安装包的版本，刷新表格"""
