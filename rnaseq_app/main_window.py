@@ -33,7 +33,7 @@ from PyQt5.QtWidgets import (
     QPlainTextEdit, QAction, QScrollArea,
     QMenu,
 )
-from PyQt5.QtCore import Qt, pyqtSlot, pyqtSignal
+from PyQt5.QtCore import Qt, QThread, pyqtSlot, pyqtSignal
 from PyQt5.QtGui import QColor, QTextCursor
 
 from .config import ConfigManager
@@ -108,6 +108,33 @@ def group_style() -> str:
             padding: 0 8px;
         }}
     """
+
+
+# ============================================================
+# 后台任务线程
+# ============================================================
+
+class EnvTaskWorker(QThread):
+    """
+    在后台线程执行 conda 任务，避免冻结 GUI。
+    任务函数 fn 在子线程运行，完成后通过 done 信号回传 (成功, 消息)。
+    """
+
+    done = pyqtSignal(bool, str)
+
+    def __init__(self, fn, parent=None):
+        super().__init__(parent)
+        self._fn = fn
+
+    def run(self):
+        try:
+            result = self._fn()
+            if isinstance(result, tuple) and len(result) >= 2:
+                self.done.emit(bool(result[0]), str(result[1]))
+            else:
+                self.done.emit(bool(result), "")
+        except Exception as e:
+            self.done.emit(False, f"执行出错: {e}")
 
 
 # ============================================================
@@ -395,7 +422,62 @@ class EnvSetupPage(QWidget):
         super().__init__(parent)
         self.config = config
         self.env_manager: Optional[CondaEnvManager] = None
+        self._env_ready = False       # 环境是否就绪（决定按钮可用性）
+        self._env_worker = None       # 后台任务线程引用（防 GC）
+        self._verify_results = []     # 验证结果缓存（后台线程回传）
+        self._install_results = []    # 安装结果缓存
         self._setup_ui()
+
+    # ---- 环境任务后台执行与忙碌状态 ----
+
+    def _run_env_task(self, fn, on_done):
+        """后台执行 conda 任务，完成后在主线程回调 on_done(ok, msg)"""
+        self._env_worker = EnvTaskWorker(fn)
+        self._env_worker.done.connect(
+            lambda ok, msg: self._on_env_task_done(ok, msg, on_done)
+        )
+        self._env_worker.start()
+
+    def _on_env_task_done(self, ok: bool, msg: str, on_done):
+        self._set_env_busy(False)
+        if on_done:
+            on_done(ok, msg)
+        self._env_worker = None
+
+    def _set_env_busy(self, busy: bool, label: str = ""):
+        """
+        任务执行期间统一管理：忙碌光标 + 状态栏提示 + 禁用操作按钮，
+        避免界面假死、用户误以为卡死。
+        """
+        if busy:
+            QApplication.setOverrideCursor(Qt.WaitCursor)
+            win = self.window()
+            if isinstance(win, QMainWindow):
+                win.statusBar().showMessage(f"⏳ {label}，请稍候...")
+            for w in (
+                self.install_btn, self.verify_btn, self.more_btn,
+                self.custom_install_btn, self.term_input,
+                self.uninstall_btn, self.uninstall_all_btn,
+                self.retry_btn, self.create_env_btn, self.detect_btn,
+            ):
+                w.setEnabled(False)
+        else:
+            QApplication.restoreOverrideCursor()
+            win = self.window()
+            if isinstance(win, QMainWindow):
+                win.statusBar().showMessage("就绪")
+            self._refresh_env_buttons()
+
+    def _refresh_env_buttons(self):
+        """根据环境就绪状态刷新所有操作按钮"""
+        ready = self._env_ready
+        for w in (
+            self.install_btn, self.verify_btn, self.more_btn,
+            self.custom_install_btn, self.uninstall_btn,
+            self.uninstall_all_btn, self.retry_btn,
+        ):
+            w.setEnabled(ready)
+        self.term_input.setEnabled(ready)
 
     def _setup_ui(self):
         # 外层滚动区域（解决窗口小内容被挤压的问题）
@@ -714,14 +796,8 @@ class EnvSetupPage(QWidget):
             if env.env_exists():
                 self.conda_status_label.setText(f"✓ {info}  |  环境 '{env.env_name}' 已存在")
                 self.create_env_btn.setText("重建环境")
-                self.install_btn.setEnabled(True)
-                self.retry_btn.setEnabled(True)
-                self.verify_btn.setEnabled(True)
-                self.custom_install_btn.setEnabled(True)
-                self.term_input.setEnabled(True)
-                self.uninstall_btn.setEnabled(True)
-                self.uninstall_all_btn.setEnabled(True)
-                self.more_btn.setEnabled(True)
+                self._env_ready = True
+                self._refresh_env_buttons()
         elif info == "NEED_INSTALL":
             # 需要自动部署本地 Conda
             self.conda_path_edit.setText(os.path.join(get_local_conda_dir(), "bin", "conda"))
@@ -729,8 +805,8 @@ class EnvSetupPage(QWidget):
             self.conda_status_label.setStyleSheet(f"color: {COLORS['warning']}; font-weight: bold;")
             self.create_env_btn.setText("自动部署 Conda")
             self.create_env_btn.setEnabled(True)
-            self.install_btn.setEnabled(False)
-            self.verify_btn.setEnabled(False)
+            self._env_ready = False
+            self._refresh_env_buttons()
         else:
             self.conda_status_label.setText(f"✗ {info}")
             self.conda_status_label.setStyleSheet(f"color: {COLORS['error']};")
@@ -770,14 +846,8 @@ class EnvSetupPage(QWidget):
         if ok:
             self.conda_status_label.setText(f"✓ 环境 '{env.env_name}' 创建成功")
             self.conda_status_label.setStyleSheet(f"color: {COLORS['success']}; font-weight: bold;")
-            self.install_btn.setEnabled(True)
-            self.retry_btn.setEnabled(True)
-            self.verify_btn.setEnabled(True)
-            self.custom_install_btn.setEnabled(True)
-            self.term_input.setEnabled(True)
-            self.uninstall_btn.setEnabled(True)
-            self.uninstall_all_btn.setEnabled(True)
-            self.more_btn.setEnabled(True)
+            self._env_ready = True
+            self._refresh_env_buttons()
         else:
             self.conda_status_label.setText(f"✗ 创建失败: {msg[:100]}")
             self.conda_status_label.setStyleSheet(f"color: {COLORS['error']};")
@@ -785,18 +855,23 @@ class EnvSetupPage(QWidget):
 
     def _install_packages(self):
         env = self.get_env_manager()
-        self.install_btn.setEnabled(False)
-        self.verify_btn.setEnabled(False)
-
         for i in range(len(PACKAGES)):
             self.pkg_table.item(i, 3).setText("等待安装...")
             self.pkg_table.item(i, 3).setForeground(QColor("#7f8c8d"))
+        self._set_env_busy(True, "正在安装软件包")
 
-        QApplication.processEvents()
+        def task_fn():
+            results = env.install_all_packages()
+            self._install_results = results
+            ok = all(s for _, s, _ in results)
+            return ok, f"成功 {sum(1 for _, s, _ in results if s)}/{len(results)}"
 
-        results = env.install_all_packages()
+        self._run_env_task(task_fn, self._on_install_done)
 
-        for i, (name, success, msg) in enumerate(results):
+    def _on_install_done(self, ok, msg):
+        env = self.get_env_manager()
+        results = self._install_results
+        for i, (name, success, _) in enumerate(results):
             if i >= len(PACKAGES):
                 continue
             status_item = self.pkg_table.item(i, 3)
@@ -806,9 +881,6 @@ class EnvSetupPage(QWidget):
                 ver = env.get_package_version(name)
                 if ver:
                     self.pkg_table.item(i, 1).setText(ver)
-
-        self.install_btn.setEnabled(True)
-        self.verify_btn.setEnabled(True)
 
         ok_count = sum(1 for _, s, _ in results if s)
         QMessageBox.information(
@@ -834,33 +906,49 @@ class EnvSetupPage(QWidget):
                 )
                 return
 
-        env = self.get_env_manager()
-        self.retry_btn.setEnabled(False)
-        QApplication.processEvents()
-
-        results = []
+        # 收集要重装的包名
+        pkg_names = []
         for row in selected_rows:
             pkg_item = self.pkg_table.item(row, 0)
-            if not pkg_item:
-                continue
-            pkg_name = pkg_item.text().strip()
+            if pkg_item:
+                pkg_names.append(pkg_item.text().strip())
+        if not pkg_names:
+            return
 
-            # 更新状态为安装中
+        # 标记"安装中"状态
+        for row in selected_rows:
             status_item = self.pkg_table.item(row, 3)
             if status_item:
                 status_item.setText("安装中...")
                 status_item.setForeground(QColor(COLORS["running"]))
-            QApplication.processEvents()
 
-            # 内置包走标准安装；自定义包走通用安装
-            pkg = next((p for p in PACKAGES if p.name == pkg_name), None)
-            if pkg is not None:
-                success, msg = env.install_package(pkg)
-            else:
-                success, msg = env.install_custom_package(pkg_name)
-            results.append((pkg_name, success, msg))
+        env = self.get_env_manager()
+        self._set_env_busy(True, "正在重装软件包")
 
-            # 更新结果 + 版本
+        def task_fn():
+            results = []
+            for pkg_name in pkg_names:
+                # 内置包走标准安装；自定义包走通用安装
+                pkg = next((p for p in PACKAGES if p.name == pkg_name), None)
+                if pkg is not None:
+                    success, msg = env.install_package(pkg)
+                else:
+                    success, msg = env.install_custom_package(pkg_name)
+                results.append((pkg_name, success, msg))
+            self._retry_results = results
+            ok = all(s for _, s, _ in results)
+            return ok, f"成功 {sum(1 for _, s, _ in results if s)}/{len(results)}"
+
+        self._run_env_task(task_fn, self._on_retry_done)
+
+    def _on_retry_done(self, ok, msg):
+        env = self.get_env_manager()
+        results = self._retry_results
+        for pkg_name, success, _ in results:
+            row = self._find_pkg_row(pkg_name)
+            if row < 0:
+                continue
+            status_item = self.pkg_table.item(row, 3)
             if status_item:
                 status_item.setText("✓ 已安装" if success else "✗ 失败")
                 status_item.setForeground(
@@ -871,10 +959,6 @@ class EnvSetupPage(QWidget):
                 ver_item = self.pkg_table.item(row, 1)
                 if ver_item and ver:
                     ver_item.setText(ver)
-            QApplication.processEvents()
-
-        self.retry_btn.setEnabled(True)
-        self.verify_btn.setEnabled(True)
 
         ok_count = sum(1 for _, s, _ in results if s)
         QMessageBox.information(
@@ -886,8 +970,20 @@ class EnvSetupPage(QWidget):
 
     def _verify_packages(self):
         env = self.get_env_manager()
-        results = env.verify_all_packages()
-        for i, (name, success, msg) in enumerate(results):
+        self._set_env_busy(True, "正在验证软件包")
+
+        def task_fn():
+            results = env.verify_all_packages()
+            self._verify_results = results
+            ok = all(r[1] for r in results)
+            return ok, f"成功 {sum(1 for r in results if r[1])}/{len(results)}"
+
+        self._run_env_task(task_fn, self._on_verify_done)
+
+    def _on_verify_done(self, ok, msg):
+        env = self.get_env_manager()
+        results = self._verify_results
+        for i, (name, success, _) in enumerate(results):
             row = self._find_pkg_row(name)
             if row < 0:
                 continue
@@ -902,7 +998,10 @@ class EnvSetupPage(QWidget):
             ver = env.get_package_version(name)
             if ver:
                 self.pkg_table.item(row, 1).setText(ver)
-        QMessageBox.information(self, "验证完成", "软件包验证完成，请查看表格中的状态。")
+        QMessageBox.information(
+            self, "验证完成",
+            f"软件包验证完成\n{msg}\n具体状态请查看表格。"
+        )
 
     # ---- 卸载 ----
 
@@ -927,28 +1026,36 @@ class EnvSetupPage(QWidget):
         if reply != QMessageBox.Yes:
             return
 
-        env = self.get_env_manager()
-        self.uninstall_btn.setEnabled(False)
-        QApplication.processEvents()
-
-        results = []
+        # 标记"卸载中"状态
         for row in rows:
-            pkg_item = self.pkg_table.item(row, 0)
-            if not pkg_item:
-                continue
-            pkg_name = pkg_item.text().strip()
             status_item = self.pkg_table.item(row, 3)
             if status_item:
                 status_item.setText("卸载中...")
                 status_item.setForeground(QColor(COLORS["running"]))
-            QApplication.processEvents()
 
-            success, msg = env.uninstall_package(pkg_name)
-            results.append((pkg_name, success, msg))
+        env = self.get_env_manager()
+        self._set_env_busy(True, "正在卸载软件包")
 
-            # 卸载成功后清空版本和状态
+        def task_fn():
+            results = []
+            for pkg_name in pkg_names:
+                success, msg = env.uninstall_package(pkg_name)
+                results.append((pkg_name, success, msg))
+            self._uninstall_results = results
+            ok = all(s for _, s, _ in results)
+            return ok, f"成功 {sum(1 for _, s, _ in results if s)}/{len(results)}"
+
+        self._run_env_task(task_fn, self._on_uninstall_done)
+
+    def _on_uninstall_done(self, ok, msg):
+        results = self._uninstall_results
+        for pkg_name, success, _ in results:
+            row = self._find_pkg_row(pkg_name)
+            if row < 0:
+                continue
+            ver_item = self.pkg_table.item(row, 1)
+            status_item = self.pkg_table.item(row, 3)
             if success:
-                ver_item = self.pkg_table.item(row, 1)
                 if ver_item:
                     ver_item.setText("")
                 if status_item:
@@ -958,9 +1065,6 @@ class EnvSetupPage(QWidget):
                 if status_item:
                     status_item.setText("✗ 卸载失败")
                     status_item.setForeground(QColor(COLORS["error"]))
-            QApplication.processEvents()
-
-        self.uninstall_btn.setEnabled(True)
 
         ok_count = sum(1 for _, s, _ in results if s)
         QMessageBox.information(
@@ -981,44 +1085,42 @@ class EnvSetupPage(QWidget):
             return
 
         env = self.get_env_manager()
-        self.uninstall_all_btn.setEnabled(False)
-        QApplication.processEvents()
+        self._set_env_busy(True, "正在删除环境")
 
-        ok, msg = env.remove_env()
+        def task_fn():
+            return env.remove_env()
 
-        if ok:
-            # 重置表格：清空版本和状态
-            for row in range(self.pkg_table.rowCount()):
-                ver_item = self.pkg_table.item(row, 1)
-                if ver_item:
-                    ver_item.setText("")
-                status_item = self.pkg_table.item(row, 3)
-                if status_item:
-                    status_item.setText("未安装")
-                    status_item.setForeground(QColor("#7f8c8d"))
+        self._run_env_task(task_fn, self._on_uninstall_all_done)
 
-            # 环境已删除，恢复初始按钮状态
-            self.install_btn.setEnabled(False)
-            self.retry_btn.setEnabled(False)
-            self.verify_btn.setEnabled(False)
-            self.custom_install_btn.setEnabled(False)
-            self.term_input.setEnabled(False)
-            self.more_btn.setEnabled(False)
-            self.create_env_btn.setText("创建环境")
-            self.create_env_btn.setEnabled(True)
-            self.conda_status_label.setText("✓ 环境已删除，点击「创建环境」重新创建")
-            self.conda_status_label.setStyleSheet(f"color: {COLORS['warning']}; font-weight: bold;")
-
-            QMessageBox.information(
-                self, "环境已删除",
-                "分析环境已删除。\n\n"
-                "接下来请点击「创建环境」重新创建环境，"
-                "然后「安装全部软件包」。"
-            )
-        else:
+    def _on_uninstall_all_done(self, ok, msg):
+        if not ok:
             QMessageBox.warning(self, "删除失败", msg)
+            return
 
-        self.uninstall_all_btn.setEnabled(True)
+        # 重置表格：清空版本和状态
+        for row in range(self.pkg_table.rowCount()):
+            ver_item = self.pkg_table.item(row, 1)
+            if ver_item:
+                ver_item.setText("")
+            status_item = self.pkg_table.item(row, 3)
+            if status_item:
+                status_item.setText("未安装")
+                status_item.setForeground(QColor("#7f8c8d"))
+
+        # 环境已删除，恢复初始按钮状态
+        self._env_ready = False
+        self._refresh_env_buttons()
+        self.create_env_btn.setText("创建环境")
+        self.create_env_btn.setEnabled(True)
+        self.conda_status_label.setText("✓ 环境已删除，点击「创建环境」重新创建")
+        self.conda_status_label.setStyleSheet(f"color: {COLORS['warning']}; font-weight: bold;")
+
+        QMessageBox.information(
+            self, "环境已删除",
+            "分析环境已删除。\n\n"
+            "接下来请点击「创建环境」重新创建环境，"
+            "然后「安装全部软件包」。"
+        )
 
     # ---- 高级设置 ----
 
@@ -1033,36 +1135,37 @@ class EnvSetupPage(QWidget):
         base_name = spec.split("=")[0].split(">")[0].split("<")[0].strip()
 
         env = self.get_env_manager()
-        self.custom_install_btn.setEnabled(False)
-        self.custom_pkg_edit.setEnabled(False)
-        self.adv_log_view.setPlainText(f"正在安装: {spec}\n（自动添加 bioconda 与 conda-forge 源）\n...")
-        QApplication.processEvents()
+        self._set_env_busy(True, f"正在安装 {spec}")
+        self.adv_log_view.appendPlainText(f"\n$ 自定义安装: {spec}")
 
-        success, msg = env.install_custom_package(spec)
-        self.adv_log_view.setPlainText(env.last_log)
+        def task_fn():
+            return env.install_custom_package(spec)
 
-        self.custom_install_btn.setEnabled(True)
-        self.custom_pkg_edit.setEnabled(True)
+        self._run_env_task(task_fn, lambda ok, msg: self._on_custom_install_done(ok, msg, base_name))
+
+    def _on_custom_install_done(self, ok, msg, base_name):
+        env = self.get_env_manager()
+        self.adv_log_view.appendPlainText(env.last_log or msg)
 
         # 把自定义包加入表格（已存在则更新版本/状态）
-        ver = env.get_package_version(base_name) if success else ""
+        ver = env.get_package_version(base_name) if ok else ""
         row = self._find_pkg_row(base_name)
         if row < 0:
             self._add_custom_pkg_row(
                 base_name, ver,
-                "✓ 已安装" if success else "✗ 失败"
+                "✓ 已安装" if ok else "✗ 失败"
             )
         else:
             ver_item = self.pkg_table.item(row, 1)
             if ver_item and ver:
                 ver_item.setText(ver)
             status_item = self.pkg_table.item(row, 3)
-            status_item.setText("✓ 已安装" if success else "✗ 失败")
+            status_item.setText("✓ 已安装" if ok else "✗ 失败")
             status_item.setForeground(
-                QColor(COLORS["success"] if success else COLORS["error"])
+                QColor(COLORS["success"] if ok else COLORS["error"])
             )
 
-        if success:
+        if ok:
             QMessageBox.information(self, "安装完成", msg)
         else:
             QMessageBox.warning(self, "安装失败", f"{msg}\n\n详细日志见「高级设置」日志区")
@@ -1097,7 +1200,7 @@ class EnvSetupPage(QWidget):
         )
 
     def _run_terminal_cmd(self):
-        """环境终端：在分析环境中执行命令，支持连续输入"""
+        """环境终端：在分析环境中执行命令，支持连续输入（后台执行不卡界面）"""
         cmd = self.term_input.text().strip()
         if not cmd:
             return
@@ -1107,17 +1210,24 @@ class EnvSetupPage(QWidget):
         self.adv_log_view.appendPlainText(f"\n$ {cmd}")
         self.term_input.clear()
         self.term_input.setEnabled(False)
-        QApplication.processEvents()
+        self._set_env_busy(True, f"正在执行命令: {cmd[:40]}")
 
-        # 同步执行（超时 2 小时，适合长任务如大软件包下载）
-        ok, output = env.run_in_env(cmd, timeout=7200)
+        def task_fn():
+            # 超时 2 小时，适合长任务如大软件包下载
+            return env.run_in_env(cmd, timeout=7200)
+
+        self._run_env_task(task_fn, self._on_terminal_done)
+
+    def _on_terminal_done(self, ok, msg):
+        env = self.get_env_manager()
+        # 输出从 env.last_log 取（含 stdout+stderr）
+        output = env.last_log if env.last_log else msg
         self.adv_log_view.appendPlainText(output if output.strip() else "(无输出)")
         if not ok:
             self.adv_log_view.appendPlainText("[命令执行失败，退出码非0]")
         # 滚动到底部
         self.adv_log_view.moveCursor(QTextCursor.End)
 
-        self.term_input.setEnabled(True)
         self.term_input.setFocus()
 
         # 命令执行成功后，尝试刷新表格中的版本信息
