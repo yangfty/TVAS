@@ -149,7 +149,6 @@ TVAS/
 ├── main.py                     # 程序入口
 ├── run.sh                      # 开发模式启动脚本
 ├── build.sh                    # PyInstaller + deb 打包脚本
-├── install.sh                  # 本地安装脚本
 ├── requirements.txt            # Python 依赖
 ├── rnaseq_app/
 │   ├── config.py               # 配置管理
@@ -158,7 +157,7 @@ TVAS/
 │   ├── pipeline.py             # 流程编排 + 后台线程
 │   ├── main_window.py          # PyQt5 主界面
 │   └── resources/              # 图标、desktop 文件
-├── scripts/                    # 辅助脚本 (重命名/格式转换)
+├── scripts/                    # 辅助脚本 (序列/GFF3 重命名)
 ├── debian/                     # Debian 打包规范
 └── uos/                        # UOS 商店上架材料
 ```

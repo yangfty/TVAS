@@ -87,10 +87,6 @@ class PackageSpec:
     def display_name(self) -> str:
         return self.name
 
-    @property
-    def is_required(self) -> bool:
-        return self.required
-
 
 PACKAGES = [
     PackageSpec(
@@ -579,24 +575,6 @@ class CondaEnvManager:
         if err:
             output += "\n" + err
         return rc == 0, output
-
-    def run_script(self, script_path: str, cwd: str = "", timeout: int = 3600) -> Tuple[bool, str]:
-        return self.run_in_env(f"bash {script_path}", cwd=cwd, timeout=timeout)
-
-    # ---- 摘要 ----
-
-    def summarize(self) -> str:
-        lines = [
-            f"Conda 路径: {self._conda_exe}",
-            f"本地 Conda: {'✓' if self.is_local_conda_installed() else '✗'}",
-            f"目标环境: {self.env_name}",
-            f"环境状态: {'✓' if self.env_exists() else '✗'}",
-        ]
-        env_path = self.get_env_path()
-        if env_path:
-            lines.append(f"环境路径: {env_path}")
-        lines.append(f"数据目录: {get_app_data_dir()}")
-        return "\n".join(lines)
 
 
 # ============================================================

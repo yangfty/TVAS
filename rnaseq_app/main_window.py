@@ -21,26 +21,25 @@
 
 import os
 import sys
-import json
 from typing import List, Optional
 
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QSplitter, QPushButton, QLabel, QFrame, QListWidget, QListWidgetItem,
-    QStackedWidget, QTextEdit, QProgressBar, QMessageBox, QFileDialog,
-    QTabWidget, QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox,
+    QStackedWidget, QProgressBar, QMessageBox, QFileDialog,
+    QTabWidget, QLineEdit, QSpinBox, QDoubleSpinBox,
     QTableWidget, QTableWidgetItem, QHeaderView, QCheckBox, QGroupBox,
-    QFormLayout, QGridLayout, QSizePolicy, QAbstractItemView,
-    QPlainTextEdit, QStatusBar, QMenuBar, QAction, QStyle, QScrollArea,
+    QFormLayout, QAbstractItemView,
+    QPlainTextEdit, QAction, QScrollArea,
     QMenu,
 )
-from PyQt5.QtCore import Qt, QTimer, pyqtSlot, pyqtSignal
-from PyQt5.QtGui import QFont, QColor, QTextCursor, QIcon, QPalette
+from PyQt5.QtCore import Qt, pyqtSlot, pyqtSignal
+from PyQt5.QtGui import QColor, QTextCursor
 
 from .config import ConfigManager
 from .env_manager import (
     CondaEnvManager, PACKAGES,
-    get_app_data_dir, get_local_conda_dir,
+    get_local_conda_dir,
 )
 from .steps import PIPELINE_STEPS, StepStatus, AnalysisContext, SampleInfo
 from .pipeline import AnalysisWorker
@@ -90,6 +89,25 @@ COLORS = {
     "danger_btn": "#e74c3c",
     "card_bg": "#ffffff",
 }
+
+
+def group_style() -> str:
+    """分组卡片统一样式（供多个页面共用）"""
+    return f"""
+        QGroupBox {{
+            font-weight: bold;
+            border: 1px solid {COLORS['border']};
+            border-radius: 8px;
+            margin-top: 12px;
+            padding-top: 20px;
+            background-color: {COLORS['card_bg']};
+        }}
+        QGroupBox::title {{
+            subcontrol-origin: margin;
+            left: 16px;
+            padding: 0 8px;
+        }}
+    """
 
 
 # ============================================================
@@ -397,7 +415,7 @@ class EnvSetupPage(QWidget):
 
         # ---- Conda 检测 ----
         group1 = QGroupBox("Conda 环境")
-        group1.setStyleSheet(self._group_style())
+        group1.setStyleSheet(group_style())
         g1_layout = QFormLayout(group1)
 
         self.conda_path_edit = QLineEdit()
@@ -428,7 +446,7 @@ class EnvSetupPage(QWidget):
 
         # ---- 软件包安装 ----
         group2 = QGroupBox("软件包安装（★ 为 De Novo 流程必需）")
-        group2.setStyleSheet(self._group_style())
+        group2.setStyleSheet(group_style())
         g2_layout = QVBoxLayout(group2)
 
         self.pkg_table = QTableWidget()
@@ -532,7 +550,7 @@ class EnvSetupPage(QWidget):
         group3 = QGroupBox("高级设置（自定义安装 · 环境终端 · 日志）")
         group3.setCheckable(True)
         group3.setChecked(False)  # 默认折叠，界面更简洁
-        group3.setStyleSheet(self._group_style())
+        group3.setStyleSheet(group_style())
         g3_layout = QVBoxLayout(group3)
 
         # 自定义安装
@@ -619,23 +637,6 @@ class EnvSetupPage(QWidget):
 
         layout.addWidget(group3)
         layout.addStretch()
-
-    def _group_style(self):
-        return f"""
-            QGroupBox {{
-                font-weight: bold;
-                border: 1px solid {COLORS['border']};
-                border-radius: 8px;
-                margin-top: 12px;
-                padding-top: 20px;
-                background-color: {COLORS['card_bg']};
-            }}
-            QGroupBox::title {{
-                subcontrol-origin: margin;
-                left: 16px;
-                padding: 0 8px;
-            }}
-        """
 
     def _populate_pkg_table(self):
         """填充内置软件包列表（版本列留空，安装后显示实际版本）"""
@@ -774,10 +775,7 @@ class EnvSetupPage(QWidget):
 
         QApplication.processEvents()
 
-        def progress_callback(current, total, msg):
-            pass
-
-        results = env.install_all_packages(progress_callback)
+        results = env.install_all_packages()
 
         for i, (name, success, msg) in enumerate(results):
             if i >= len(PACKAGES):
@@ -1141,14 +1139,7 @@ class SampleConfigPage(QWidget):
         layout = QVBoxLayout(self)
 
         group = QGroupBox("样本信息（Trinity samples_file 格式）")
-        group.setStyleSheet(f"""
-            QGroupBox {{
-                font-weight: bold; border: 1px solid {COLORS['border']};
-                border-radius: 8px; margin-top: 12px; padding-top: 20px;
-                background-color: {COLORS['card_bg']};
-            }}
-            QGroupBox::title {{ subcontrol-origin: margin; left: 16px; padding: 0 8px; }}
-        """)
+        group.setStyleSheet(group_style())
         g_layout = QVBoxLayout(group)
 
         # 说明
@@ -1266,7 +1257,7 @@ class ParamConfigPage(QWidget):
 
         # ---- 基本参数 ----
         group1 = QGroupBox("基本参数")
-        group1.setStyleSheet(self._group_style())
+        group1.setStyleSheet(group_style())
         g1 = QFormLayout(group1)
 
         self.work_dir_edit = QLineEdit()
@@ -1297,7 +1288,7 @@ class ParamConfigPage(QWidget):
 
         # ---- Fastp 参数 ----
         group2 = QGroupBox("Fastp 过滤参数")
-        group2.setStyleSheet(self._group_style())
+        group2.setStyleSheet(group_style())
         g2 = QFormLayout(group2)
 
         fp = self.config.fastp_params()
@@ -1315,7 +1306,7 @@ class ParamConfigPage(QWidget):
 
         # ---- Trinity 参数 ----
         group3 = QGroupBox("Trinity 组装参数")
-        group3.setStyleSheet(self._group_style())
+        group3.setStyleSheet(group_style())
         g3 = QFormLayout(group3)
 
         self.tr_mem_edit = QLineEdit()
@@ -1326,7 +1317,7 @@ class ParamConfigPage(QWidget):
 
         # ---- CD-HIT 参数 ----
         group4 = QGroupBox("CD-HIT 去冗余参数")
-        group4.setStyleSheet(self._group_style())
+        group4.setStyleSheet(group_style())
         g4 = QFormLayout(group4)
 
         ch = self.config.cd_hit_params()
@@ -1341,7 +1332,7 @@ class ParamConfigPage(QWidget):
 
         # ---- 步骤选择 ----
         group5 = QGroupBox("执行步骤选择")
-        group5.setStyleSheet(self._group_style())
+        group5.setStyleSheet(group_style())
         g5_layout = QVBoxLayout(group5)
 
         self.step_checkboxes = {}
@@ -1354,16 +1345,6 @@ class ParamConfigPage(QWidget):
 
         layout.addWidget(group5)
         layout.addStretch()
-
-    def _group_style(self):
-        return f"""
-            QGroupBox {{
-                font-weight: bold; border: 1px solid {COLORS['border']};
-                border-radius: 8px; margin-top: 12px; padding-top: 20px;
-                background-color: {COLORS['card_bg']};
-            }}
-            QGroupBox::title {{ subcontrol-origin: margin; left: 16px; padding: 0 8px; }}
-        """
 
     def _browse_work_dir(self):
         path = QFileDialog.getExistingDirectory(self, "选择工作目录")
@@ -1540,11 +1521,6 @@ class MainWindow(QMainWindow):
             }}
         """)
         control_layout.addWidget(self.progress_bar, 1)
-
-        self.run_selected_btn = QPushButton("▶ 运行当前步骤")
-        self.run_selected_btn.clicked.connect(self._on_run_all)
-        self.run_selected_btn.setStyleSheet(self._btn_style(COLORS["primary_btn"]))
-        control_layout.addWidget(self.run_selected_btn)
 
         self.run_all_btn = QPushButton("▶ 运行全部流程")
         self.run_all_btn.clicked.connect(self._on_run_all)
@@ -1725,7 +1701,6 @@ class MainWindow(QMainWindow):
 
     def _set_running_state(self, running: bool):
         self.run_all_btn.setEnabled(not running)
-        self.run_selected_btn.setEnabled(not running)
         self.stop_btn.setEnabled(running)
         self.tab_widget.setEnabled(not running)
         if running:

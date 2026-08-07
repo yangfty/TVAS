@@ -14,13 +14,7 @@ from dataclasses import dataclass, field
 from PyQt5.QtCore import QThread, pyqtSignal
 
 from .env_manager import CondaEnvManager
-from .steps import (
-    PIPELINE_STEPS, StepStatus, StepResult, AnalysisContext, SampleInfo,
-    step_fastqc, step_fastp, step_rcorrector,
-    step_trinity_assemble, step_longest_isoform, step_cd_hit,
-    step_rename_sequences, step_transdecoder_longorfs,
-    step_transdecoder_predict, step_rename_gff3, step_gffread,
-)
+from .steps import PIPELINE_STEPS, StepStatus, StepResult, AnalysisContext
 
 
 # ============================================================
