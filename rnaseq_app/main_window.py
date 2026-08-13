@@ -1173,21 +1173,34 @@ class EnvSetupPage(QWidget):
             )
 
     def _refresh_versions_from_env(self):
-        """从环境中读取所有已安装包的版本，刷新表格"""
+        """从环境中读取所有已安装包的版本，刷新表格（后台执行，不卡界面）"""
         env = self.get_env_manager()
+        # 先在主线程收集包名（后台线程不能访问 GUI 控件）
+        pkg_names = []
         for row in range(self.pkg_table.rowCount()):
-            pkg_item = self.pkg_table.item(row, 0)
-            if not pkg_item:
-                continue
-            pkg_name = pkg_item.text().strip()
-            ver = env.get_package_version(pkg_name)
-            if ver:
-                self.pkg_table.item(row, 1).setText(ver)
-                # 未标记状态的顺带标记
-                status_item = self.pkg_table.item(row, 3)
-                if status_item and status_item.text() in ("未安装", "等待安装..."):
-                    status_item.setText("✓ 已安装")
-                    status_item.setForeground(QColor(COLORS["success"]))
+            item = self.pkg_table.item(row, 0)
+            pkg_names.append(item.text().strip() if item else "")
+        self._set_env_busy(True, "正在刷新已安装版本")
+
+        def task_fn():
+            results = []
+            for i, name in enumerate(pkg_names):
+                ver = env.get_package_version(name) if name else ""
+                results.append((i, ver))
+            return True, results
+
+        def on_done(ok, results):
+            if ok and results:
+                for row, ver in results:
+                    if ver:
+                        self.pkg_table.item(row, 1).setText(ver)
+                        status_item = self.pkg_table.item(row, 3)
+                        if status_item and status_item.text() in ("未安装", "等待安装..."):
+                            status_item.setText("✓ 已安装")
+                            status_item.setForeground(QColor(COLORS["success"]))
+            QMessageBox.information(self, "刷新完成", "已安装版本刷新完毕")
+
+        self._run_env_task(task_fn, on_done)
 
 
 # ============================================================

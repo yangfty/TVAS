@@ -557,12 +557,17 @@ class CondaEnvManager:
         return results
 
     def verify_all_packages(self) -> List[Tuple[str, bool, str]]:
+        import re
         results = []
         for pkg in PACKAGES:
             if not pkg.verify_cmd:
                 results.append((pkg.name, True, "无需验证"))
                 continue
             ok, msg = self.run_in_env(pkg.verify_cmd)
+            # 宽松判断：--version 类命令即使退出码非0，
+            # 只要输出含版本号就算通过（Trinity/cd-hit 等 --version 退出码可能非0）
+            if not ok and re.search(r'\d+\.\d+', msg):
+                ok = True
             results.append((pkg.name, ok, msg.strip() if ok else msg[:200]))
         return results
 
