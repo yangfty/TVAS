@@ -93,6 +93,36 @@ COLORS = {
 }
 
 
+def _btn_style(bg: str, hover: str, padding: str = "8px 20px") -> str:
+    """统一实心按钮样式"""
+    return f"""
+        QPushButton {{
+            background-color: {bg};
+            color: white;
+            padding: {padding};
+            border-radius: 4px;
+            font-weight: bold;
+            font-size: 13px;
+        }}
+        QPushButton:hover {{ background-color: {hover}; }}
+        QPushButton:disabled {{ background-color: #bdc3c7; }}
+    """
+
+
+_BTN_OUTLINE = """
+    QPushButton {
+        background-color: #fff;
+        color: #555;
+        padding: 8px 16px;
+        border: 1px solid #bdc3c7;
+        border-radius: 4px;
+        font-size: 13px;
+    }
+    QPushButton:hover { border-color: #7f8c8d; color: #333; }
+    QPushButton:disabled { color: #bdc3c7; border-color: #ecf0f1; }
+"""
+
+
 def group_style() -> str:
     """分组卡片统一样式（供多个页面共用）"""
     return f"""
@@ -518,9 +548,11 @@ class EnvSetupPage(QWidget):
         btn_layout = QHBoxLayout()
         self.detect_btn = QPushButton("检测 Conda")
         self.detect_btn.clicked.connect(self._detect_conda)
+        self.detect_btn.setStyleSheet(_btn_style("#7f8c8d", "#6c7a7a"))
         self.create_env_btn = QPushButton("创建环境")
         self.create_env_btn.clicked.connect(self._create_env)
         self.create_env_btn.setEnabled(False)
+        self.create_env_btn.setStyleSheet(_btn_style(COLORS['primary_btn'], COLORS['primary_btn_hover']))
         btn_layout.addWidget(self.detect_btn)
         btn_layout.addWidget(self.create_env_btn)
         btn_layout.addStretch()
@@ -555,32 +587,11 @@ class EnvSetupPage(QWidget):
         self.install_btn = QPushButton("▶ 安装全部软件包")
         self.install_btn.clicked.connect(self._install_packages)
         self.install_btn.setEnabled(False)
-        self.install_btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {COLORS['primary_btn']};
-                color: white;
-                padding: 10px 26px;
-                border-radius: 4px;
-                font-weight: bold;
-                font-size: 14px;
-            }}
-            QPushButton:hover {{ background-color: {COLORS['primary_btn_hover']}; }}
-            QPushButton:disabled {{ background-color: #bdc3c7; }}
-        """)
+        self.install_btn.setStyleSheet(_btn_style(COLORS['primary_btn'], COLORS['primary_btn_hover'], "8px 24px"))
         self.verify_btn = QPushButton("✓ 验证安装")
         self.verify_btn.clicked.connect(self._verify_packages)
         self.verify_btn.setEnabled(False)
-        self.verify_btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {COLORS['success']};
-                color: white;
-                padding: 10px 20px;
-                border-radius: 4px;
-                font-weight: bold;
-            }}
-            QPushButton:hover {{ background-color: #219150; }}
-            QPushButton:disabled {{ background-color: #bdc3c7; }}
-        """)
+        self.verify_btn.setStyleSheet(_btn_style(COLORS['success'], "#219150"))
 
         # 「更多操作」下拉菜单（重装/卸载等次要操作）
         self.more_menu = QMenu(self)
@@ -621,17 +632,7 @@ class EnvSetupPage(QWidget):
         self.more_btn = QPushButton("更多操作 ▾")
         self.more_btn.setMenu(self.more_menu)
         self.more_btn.setEnabled(False)
-        self.more_btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: #7f8c8d;
-                color: white;
-                padding: 10px 16px;
-                border-radius: 4px;
-                font-weight: bold;
-            }}
-            QPushButton:hover {{ background-color: #6c7a7a; }}
-            QPushButton:disabled {{ background-color: #bdc3c7; }}
-        """)
+        self.more_btn.setStyleSheet(_btn_style("#7f8c8d", "#6c7a7a"))
 
         pkg_btn_layout.addWidget(self.install_btn)
         pkg_btn_layout.addWidget(self.verify_btn)
@@ -656,6 +657,7 @@ class EnvSetupPage(QWidget):
         self.custom_install_btn = QPushButton("安装")
         self.custom_install_btn.clicked.connect(self._install_custom)
         self.custom_install_btn.setEnabled(False)
+        self.custom_install_btn.setStyleSheet(_btn_style("#7f8c8d", "#6c7a7a"))
         custom_row.addWidget(self.custom_install_btn)
         g2_layout.addLayout(custom_row)
 
@@ -664,29 +666,13 @@ class EnvSetupPage(QWidget):
         log_row.addStretch()
         self.view_pkg_log_btn = QPushButton("查看选中包日志")
         self.view_pkg_log_btn.clicked.connect(self._view_pkg_log)
+        self.view_pkg_log_btn.setStyleSheet(_BTN_OUTLINE)
         log_row.addWidget(self.view_pkg_log_btn)
         self.view_last_log_btn = QPushButton("查看最近命令输出")
         self.view_last_log_btn.clicked.connect(self._view_last_log)
+        self.view_last_log_btn.setStyleSheet(_BTN_OUTLINE)
         log_row.addWidget(self.view_last_log_btn)
         g2_layout.addLayout(log_row)
-
-        # 命令日志区（安装/验证操作的完整输出）
-        self.log_view = QPlainTextEdit()
-        self.log_view.setReadOnly(True)
-        self.log_view.setMinimumHeight(150)
-        self.log_view.setMaximumBlockCount(5000)
-        self.log_view.setPlaceholderText("命令日志区：安装/验证操作的完整输出显示在这里")
-        self.log_view.setStyleSheet("""
-            QPlainTextEdit {
-                background-color: #1e1e1e;
-                color: #d4d4d4;
-                font-family: "Consolas", "DejaVu Sans Mono", monospace;
-                font-size: 12px;
-                border: 1px solid #333;
-                border-radius: 6px;
-            }
-        """)
-        g2_layout.addWidget(self.log_view)
 
         layout.addStretch()
 
@@ -1087,7 +1073,6 @@ class EnvSetupPage(QWidget):
 
         env = self.get_env_manager()
         self._set_env_busy(True, f"正在安装 {spec}")
-        self._append_log(f"\n$ 自定义安装: {spec}")
 
         def task_fn():
             return env.install_custom_package(spec)
@@ -1096,7 +1081,6 @@ class EnvSetupPage(QWidget):
 
     def _on_custom_install_done(self, ok, msg, base_name):
         env = self.get_env_manager()
-        self._append_log(env.last_log or msg)
 
         # 把自定义包加入表格（已存在则更新版本/状态）
         ver = env.get_package_version(base_name) if ok else ""
@@ -1119,7 +1103,7 @@ class EnvSetupPage(QWidget):
         if ok:
             QMessageBox.information(self, "安装完成", msg)
         else:
-            QMessageBox.warning(self, "安装失败", f"{msg}\n\n详细日志见「高级设置」日志区")
+            QMessageBox.warning(self, "安装失败", f"{msg}\n\n点击「查看最近命令输出」查看详细日志")
 
     def _view_pkg_log(self):
         """查看选中软件包的安装日志"""
@@ -1138,27 +1122,38 @@ class EnvSetupPage(QWidget):
             lines.append(f"===== {pkg_name} 最近一次安装日志 =====\n")
             lines.append(env.get_package_log(pkg_name))
             lines.append("")
-        self._show_log("\n".join(lines))
+        self._show_log_dialog("安装日志", "\n".join(lines))
 
     def _view_last_log(self):
         """查看最近一次 conda 命令的完整输出"""
         env = self.get_env_manager()
         if not env.last_log:
-            self._show_log("（暂无命令记录，请先执行安装/验证操作）")
+            QMessageBox.information(self, "提示", "暂无命令记录，请先执行安装/验证操作")
             return
-        self._show_log(
-            f"$ {env.last_cmd}\n\n{env.last_log}"
-        )
+        self._show_log_dialog("最近命令输出", f"$ {env.last_cmd}\n\n{env.last_log}")
 
 
-    def _append_log(self, text: str):
-        """追加日志到命令日志区"""
-        self.log_view.appendPlainText(text)
-        self.log_view.moveCursor(QTextCursor.End)
-
-    def _show_log(self, text: str):
-        """覆盖显示日志到命令日志区"""
-        self.log_view.setPlainText(text)
+    def _show_log_dialog(self, title: str, text: str):
+        """弹窗显示日志（可滚动查看长文本）"""
+        from PyQt5.QtWidgets import QDialog
+        dlg = QDialog(self)
+        dlg.setWindowTitle(title)
+        dlg.resize(700, 500)
+        v = QVBoxLayout(dlg)
+        edit = QPlainTextEdit()
+        edit.setReadOnly(True)
+        edit.setPlainText(text)
+        edit.setStyleSheet("""
+            QPlainTextEdit {
+                font-family: "Consolas", "DejaVu Sans Mono", monospace;
+                font-size: 12px;
+            }
+        """)
+        v.addWidget(edit)
+        btn = QPushButton("关闭")
+        btn.clicked.connect(dlg.accept)
+        v.addWidget(btn)
+        dlg.exec_()
 
     def _open_system_terminal(self):
         """打开 UOS 系统终端，cd 到工作目录 + conda activate 进入分析环境"""
@@ -1171,8 +1166,9 @@ class EnvSetupPage(QWidget):
         if not ok:
             QMessageBox.warning(self, "打开终端失败", msg)
         else:
-            self._append_log(
-                f"$ 打开系统终端 ({msg}) — 已进入分析环境"
+            QMessageBox.information(
+                self, "已打开系统终端",
+                f"已启动系统终端 ({msg})，进入分析环境"
                 + (f"，工作目录: {work_dir}" if work_dir else "")
             )
 
