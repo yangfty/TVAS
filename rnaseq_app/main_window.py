@@ -166,9 +166,9 @@ class ModuleNavBar(QFrame):
 
     # 模块定义: (名称, 状态, 说明)
     MODULES = [
-        ("1. De Novo 组装", "可用"),
-        ("2. 序列比对", "开发中"),
-        ("3. 差异表达分析", "开发中"),
+        ("一、de novo 组装", "可用"),
+        ("二、序列比对", "开发中"),
+        ("三、差异表达分析", "开发中"),
     ]
 
     def __init__(self, parent=None):
@@ -329,7 +329,7 @@ class ModulePlaceholderPage(QWidget):
         layout.addStretch()
 
         # 底部提示
-        tip = QLabel("该模块正在开发中，将在后续版本中开放。当前版本请使用「1. De Novo 组装」模块。")
+        tip = QLabel("该模块正在开发中，将在后续版本中开放。当前版本请使用「一、de novo 组装」模块。")
         tip.setStyleSheet("color: #bdc3c7; font-size: 12px;")
         layout.addWidget(tip)
 
@@ -1316,6 +1316,24 @@ class SampleConfigPage(QWidget):
 # 参数配置页
 # ============================================================
 
+class _NoWheelSpinBox(QSpinBox):
+    """滚动页面时滚轮不会误改数值的 QSpinBox（仅当控件获得焦点时才响应滚轮）"""
+    def wheelEvent(self, event):
+        if self.hasFocus():
+            super().wheelEvent(event)
+        else:
+            event.ignore()
+
+
+class _NoWheelDoubleSpinBox(QDoubleSpinBox):
+    """滚动页面时滚轮不会误改数值的 QDoubleSpinBox（仅当控件获得焦点时才响应滚轮）"""
+    def wheelEvent(self, event):
+        if self.hasFocus():
+            super().wheelEvent(event)
+        else:
+            event.ignore()
+
+
 class ParamConfigPage(QWidget):
     """参数配置页面"""
 
@@ -1323,6 +1341,17 @@ class ParamConfigPage(QWidget):
         super().__init__(parent)
         self.config = config
         self._setup_ui()
+
+    # 各参数默认值（供「恢复默认参数」使用）
+    _DEFAULTS = {
+        "species_prefix": "Hvi",
+        "gene_prefix": "Uni",
+        "threads": 4,
+        "fastp_quality": 20,
+        "fastp_min_length": 50,
+        "trinity_max_memory": "50G",
+        "cd_hit_identity": 0.80,
+    }
 
     def _setup_ui(self):
         # 外层：滚动区域，窗口较小时也能完整浏览所有参数
@@ -1339,6 +1368,16 @@ class ParamConfigPage(QWidget):
         layout = QVBoxLayout(content)
         layout.setSpacing(16)
         layout.setContentsMargins(12, 12, 12, 12)
+
+        # ---- 顶部操作条：恢复默认参数 ----
+        top_bar = QHBoxLayout()
+        top_bar.addStretch()
+        self.restore_default_btn = QPushButton("↺ 恢复默认参数")
+        self.restore_default_btn.setToolTip("将所有参数恢复为默认值")
+        self.restore_default_btn.setStyleSheet(_btn_style("#7f8c8d", "#6c7a7a"))
+        self.restore_default_btn.clicked.connect(self._restore_defaults)
+        top_bar.addWidget(self.restore_default_btn)
+        layout.addLayout(top_bar)
 
         # ---- 基本参数 ----
         group1 = QGroupBox("基本参数")
@@ -1372,19 +1411,21 @@ class ParamConfigPage(QWidget):
         self.prefix_edit.setText(self.config.species_prefix)
         self.prefix_edit.setPlaceholderText("如 Hvi")
         self.prefix_edit.setToolTip("组装后的转录本序列命名前缀，如 Hvi_TRINITY_DN1000_c0_g1")
-        g1.addRow("物种前缀:", self.prefix_edit)
+        prefix_field = self._line_row(self.prefix_edit, f"默认 {self._DEFAULTS['species_prefix']}")
+        g1.addRow("物种前缀:", prefix_field)
 
         self.gene_prefix_edit = QLineEdit()
         self.gene_prefix_edit.setText(self.config.gene_prefix)
         self.gene_prefix_edit.setPlaceholderText("如 Uni")
         self.gene_prefix_edit.setToolTip("基因命名前缀，用于最终的重命名步骤统一基因ID格式")
-        g1.addRow("基因前缀:", self.gene_prefix_edit)
+        gene_field = self._line_row(self.gene_prefix_edit, f"默认 {self._DEFAULTS['gene_prefix']}")
+        g1.addRow("基因前缀:", gene_field)
 
-        self.thread_spin = QSpinBox()
+        self.thread_spin = _NoWheelSpinBox()
         self.thread_spin.setRange(1, 128)
         self.thread_spin.setValue(self.config.default_threads)
         self.thread_spin.setToolTip("分配给各步骤的CPU线程数，建议不超过物理核心数；Trinity/CD-HIT等会用到")
-        g1.addRow("CPU 线程:", self.thread_spin)
+        g1.addRow("CPU 线程:", self._spin_row(self.thread_spin, self._DEFAULTS["threads"]))
 
         layout.addWidget(group1)
 
@@ -1397,17 +1438,17 @@ class ParamConfigPage(QWidget):
         g2.setContentsMargins(16, 22, 16, 16)
 
         fp = self.config.fastp_params()
-        self.fp_q_spin = QSpinBox()
+        self.fp_q_spin = _NoWheelSpinBox()
         self.fp_q_spin.setRange(10, 40)
         self.fp_q_spin.setValue(fp.get("quality_threshold", 20))
         self.fp_q_spin.setToolTip("Phred质量阈值，低于此值的碱基将被截断（-q 参数）。值越高过滤越严格")
-        g2.addRow("质量阈值 (-q):", self.fp_q_spin)
+        g2.addRow("质量阈值 (-q):", self._spin_row(self.fp_q_spin, self._DEFAULTS["fastp_quality"]))
 
-        self.fp_l_spin = QSpinBox()
+        self.fp_l_spin = _NoWheelSpinBox()
         self.fp_l_spin.setRange(20, 200)
         self.fp_l_spin.setValue(fp.get("min_length", 50))
         self.fp_l_spin.setToolTip("过滤后reads的最小保留长度（-l 参数），短于此值的reads将被丢弃")
-        g2.addRow("最小长度 (-l):", self.fp_l_spin)
+        g2.addRow("最小长度 (-l):", self._spin_row(self.fp_l_spin, self._DEFAULTS["fastp_min_length"]))
 
         layout.addWidget(group2)
 
@@ -1422,10 +1463,11 @@ class ParamConfigPage(QWidget):
         self.tr_mem_edit = QLineEdit()
         self.tr_mem_edit.setText(self.config.trinity_params().get("max_memory", "50G"))
         self.tr_mem_edit.setToolTip("Trinity组装可用的最大内存（--max_memory）。格式如 50G、100G，建议设为物理内存的80%")
+        tr_field = self._line_row(self.tr_mem_edit, f"默认 {self._DEFAULTS['trinity_max_memory']}")
+        g3.addRow("最大内存 (--max_memory):", tr_field)
         tr_hint = QLabel("格式: 数字+单位（如 50G / 100G），建议设为物理内存的 80%")
         tr_hint.setStyleSheet("color: #7f8c8d; font-size: 12px;")
         tr_hint.setWordWrap(True)
-        g3.addRow("最大内存 (--max_memory):", self.tr_mem_edit)
         g3.addRow("", tr_hint)
 
         layout.addWidget(group3)
@@ -1439,41 +1481,64 @@ class ParamConfigPage(QWidget):
         g4.setContentsMargins(16, 22, 16, 16)
 
         ch = self.config.cd_hit_params()
-        self.ch_identity_spin = QDoubleSpinBox()
+        self.ch_identity_spin = _NoWheelDoubleSpinBox()
         self.ch_identity_spin.setRange(0.70, 1.0)
         self.ch_identity_spin.setSingleStep(0.05)
         self.ch_identity_spin.setValue(ch.get("identity_threshold", 0.80))
         self.ch_identity_spin.setDecimals(2)
         self.ch_identity_spin.setToolTip("序列相似性阈值（-c）。0.80 表示80%相似度的转录本聚为一类去冗余，值越高保留越多")
+        g4.addRow("相似性阈值 (-c):", self._spin_row(self.ch_identity_spin, f"{self._DEFAULTS['cd_hit_identity']:.2f}"))
         ch_hint = QLabel("范围 0.70~1.00。0.80=较宽松去冗余，0.95=较严格保留更多转录本")
         ch_hint.setStyleSheet("color: #7f8c8d; font-size: 12px;")
         ch_hint.setWordWrap(True)
-        g4.addRow("相似性阈值 (-c):", self.ch_identity_spin)
         g4.addRow("", ch_hint)
 
         layout.addWidget(group4)
-
-        # ---- 步骤选择 ----
-        group5 = QGroupBox("执行步骤选择")
-        group5.setStyleSheet(group_style())
-        g5_layout = QVBoxLayout(group5)
-        g5_layout.setSpacing(8)
-        g5_layout.setContentsMargins(16, 22, 16, 16)
-
-        step_hint = QLabel("De Novo 组装流程的 11 个步骤均为必需，暂不支持跳过。")
-        step_hint.setStyleSheet("color: #7f8c8d; font-size: 12px; margin-bottom: 4px;")
-        g5_layout.addWidget(step_hint)
-
-        self.step_checkboxes = {}
-        for step in PIPELINE_STEPS:
-            cb = QCheckBox(f"{step['name']} - {step['description']}")
-            cb.setChecked(True)
-            cb.setEnabled(False)  # de novo 流程所有步骤都是必需的
-            self.step_checkboxes[step["id"]] = cb
-            g5_layout.addWidget(cb)
-
-        layout.addWidget(group5)
         layout.addStretch()
+
+    # ---- 行布局辅助：spinbox + 默认值提示 ----
+
+    def _spin_row(self, spin, default_text) -> QHBoxLayout:
+        """数值控件 + 默认值提示，缩短编辑条宽度，布局更美观"""
+        spin.setFixedWidth(100)
+        hint = QLabel(f"默认 {default_text}")
+        hint.setStyleSheet("color: #95a5a6; font-size: 12px;")
+        field = QHBoxLayout()
+        field.setSpacing(8)
+        field.addWidget(spin)
+        field.addWidget(hint)
+        field.addStretch()
+        return field
+
+    def _line_row(self, line_edit, default_text) -> QHBoxLayout:
+        """文本控件 + 默认值提示"""
+        line_edit.setMaximumWidth(200)
+        hint = QLabel(default_text)
+        hint.setStyleSheet("color: #95a5a6; font-size: 12px;")
+        field = QHBoxLayout()
+        field.setSpacing(8)
+        field.addWidget(line_edit)
+        field.addWidget(hint)
+        field.addStretch()
+        return field
+
+    def _restore_defaults(self):
+        """将所有参数恢复为默认值"""
+        d = self._DEFAULTS
+        self.prefix_edit.setText(d["species_prefix"])
+        self.gene_prefix_edit.setText(d["gene_prefix"])
+        self.thread_spin.setValue(d["threads"])
+        self.fp_q_spin.setValue(d["fastp_quality"])
+        self.fp_l_spin.setValue(d["fastp_min_length"])
+        self.tr_mem_edit.setText(d["trinity_max_memory"])
+        self.ch_identity_spin.setValue(d["cd_hit_identity"])
+        self._log_parent("已恢复默认参数")
+
+    def _log_parent(self, msg: str):
+        """向主窗口日志输出（运行页日志）"""
+        win = self.window()
+        if hasattr(win, "_log"):
+            win._log(msg)
 
     def _browse_work_dir(self):
         path = QFileDialog.getExistingDirectory(self, "选择工作目录")
@@ -1491,9 +1556,6 @@ class ParamConfigPage(QWidget):
 
     def get_threads(self) -> int:
         return self.thread_spin.value()
-
-    def get_active_steps(self) -> List[str]:
-        return [sid for sid, cb in self.step_checkboxes.items() if cb.isChecked()]
 
     def get_extra_params(self) -> dict:
         return {
@@ -1551,6 +1613,20 @@ class MainWindow(QMainWindow):
         denovo_layout.setContentsMargins(0, 0, 0, 0)
         denovo_layout.setSpacing(0)
 
+        # 面包屑导航栏：清晰显示当前所处的大步骤（模块）与小步骤（Tab）
+        self.breadcrumb_label = QLabel()
+        self.breadcrumb_label.setStyleSheet(f"""
+            QLabel {{
+                background-color: {COLORS['card_bg']};
+                color: #2c3e50;
+                font-size: 14px;
+                font-weight: bold;
+                padding: 8px 16px;
+                border-bottom: 1px solid {COLORS['border']};
+            }}
+        """)
+        denovo_layout.addWidget(self.breadcrumb_label)
+
         # 顶部水平区域
         top_splitter = QSplitter(Qt.Horizontal)
 
@@ -1584,22 +1660,39 @@ class MainWindow(QMainWindow):
         self.tab_widget.addTab(self.sample_page, "2. 样本配置")
         self.tab_widget.addTab(self.param_page, "3. 参数配置")
 
-        top_splitter.addWidget(self.tab_widget)
-        top_splitter.setStretchFactor(0, 0)
-        top_splitter.setStretchFactor(1, 1)
+        # ---- 第 4 个 Tab: 任务运行（执行步骤选择 + 运行日志 + 进度/按钮） ----
+        run_page = QWidget()
+        run_layout = QVBoxLayout(run_page)
+        run_layout.setContentsMargins(12, 12, 12, 12)
+        run_layout.setSpacing(10)
 
-        denovo_layout.addWidget(top_splitter, 1)
+        # 执行步骤选择
+        step_group = QGroupBox("执行步骤选择")
+        step_group.setStyleSheet(group_style())
+        sg_layout = QVBoxLayout(step_group)
+        sg_layout.setSpacing(6)
+        sg_layout.setContentsMargins(16, 22, 16, 16)
+        step_hint = QLabel("de novo 组装流程的 11 个步骤均为必需，暂不支持跳过。")
+        step_hint.setStyleSheet("color: #7f8c8d; font-size: 12px; margin-bottom: 4px;")
+        sg_layout.addWidget(step_hint)
+        self.step_checkboxes = {}
+        for step in PIPELINE_STEPS:
+            cb = QCheckBox(f"{step['name']} - {step['description']}")
+            cb.setChecked(True)
+            cb.setEnabled(False)  # de novo 流程所有步骤都是必需的
+            self.step_checkboxes[step["id"]] = cb
+            sg_layout.addWidget(cb)
+        run_layout.addWidget(step_group)
 
-        # 日志输出
-        log_frame = QFrame()
-        log_frame.setFrameShape(QFrame.StyledPanel)
-        log_frame.setMaximumHeight(220)
-        log_layout = QVBoxLayout(log_frame)
-        log_layout.setContentsMargins(8, 4, 8, 4)
-
+        # 运行日志
+        log_group = QGroupBox("运行日志")
+        log_group.setStyleSheet(group_style())
+        log_layout = QVBoxLayout(log_group)
+        log_layout.setContentsMargins(8, 18, 8, 8)
+        log_layout.setSpacing(4)
         log_header = QHBoxLayout()
-        log_label = QLabel("运行日志")
-        log_label.setStyleSheet("font-weight: bold; color: #2c3e50;")
+        log_label = QLabel("实时输出（分析运行中的各环节日志）")
+        log_label.setStyleSheet("color: #7f8c8d; font-size: 12px;")
         log_header.addWidget(log_label)
         log_header.addStretch()
         self.clear_log_btn = QPushButton("清空")
@@ -1622,17 +1715,11 @@ class MainWindow(QMainWindow):
             }}
         """)
         log_layout.addWidget(self.log_view)
+        run_layout.addWidget(log_group, 1)
 
-        denovo_layout.addWidget(log_frame, 0)
-
-        # 进度条与按钮
-        control_frame = QFrame()
-        control_frame.setStyleSheet(f"""
-            QFrame {{ background-color: {COLORS['card_bg']}; border-top: 1px solid {COLORS['border']}; }}
-        """)
-        control_layout = QHBoxLayout(control_frame)
-        control_layout.setContentsMargins(16, 8, 16, 8)
-
+        # 进度条与运行按钮
+        control_layout = QHBoxLayout()
+        control_layout.setContentsMargins(0, 0, 0, 0)
         self.progress_bar = QProgressBar()
         self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(0)
@@ -1661,10 +1748,23 @@ class MainWindow(QMainWindow):
         self.stop_btn.setEnabled(False)
         self.stop_btn.setStyleSheet(self._btn_style(COLORS["danger_btn"]))
         control_layout.addWidget(self.stop_btn)
+        run_layout.addLayout(control_layout)
 
-        denovo_layout.addWidget(control_frame, 0)
+        self.tab_widget.addTab(run_page, "4. 任务运行")
+
+        # Tab 切换时更新面包屑
+        self.tab_widget.currentChanged.connect(self._update_breadcrumb)
+
+        top_splitter.addWidget(self.tab_widget)
+        top_splitter.setStretchFactor(0, 0)
+        top_splitter.setStretchFactor(1, 1)
+
+        denovo_layout.addWidget(top_splitter, 1)
 
         self.module_stack.addWidget(denovo_widget)
+
+        # 初始化面包屑
+        self._update_breadcrumb(0)
 
         # ======== 模块2: 序列比对（占位） ========
         self.align_page = ModulePlaceholderPage(
@@ -1743,13 +1843,28 @@ class MainWindow(QMainWindow):
     def _on_module_changed(self, idx: int):
         """切换分析模块"""
         self.module_stack.setCurrentIndex(idx)
-        module_names = ["De Novo 组装", "序列比对", "差异表达分析"]
+        module_names = ["de novo 组装", "序列比对", "差异表达分析"]
         if idx == 0:
-            self.statusBar().showMessage("就绪 | De Novo 组装模块")
+            self.statusBar().showMessage("就绪 | de novo 组装模块")
         else:
             self.statusBar().showMessage(
                 f"{module_names[idx]} 模块开发中，将在后续版本开放"
             )
+        self._update_breadcrumb(self.tab_widget.currentIndex() if idx == 0 else -1)
+
+    def _update_breadcrumb(self, tab_idx: int):
+        """更新顶部面包屑，清晰显示当前大步骤（模块）与小步骤（Tab）"""
+        module_idx = self.module_stack.currentIndex()
+        module_names = ["一、de novo 组装", "二、序列比对", "三、差异表达分析"]
+        if module_idx != 0:
+            # 非 de novo 模块：仅显示模块名
+            self.breadcrumb_label.setText(f"📍 {module_names[module_idx]}")
+            return
+        tab_labels = [
+            "1. 环境设置", "2. 样本配置", "3. 参数配置", "4. 任务运行",
+        ]
+        sub = tab_labels[tab_idx] if 0 <= tab_idx < len(tab_labels) else ""
+        self.breadcrumb_label.setText(f"📍 {module_names[0]}  ›  {sub}")
 
     # ---- 运行流程 ----
 
@@ -1794,7 +1909,7 @@ class MainWindow(QMainWindow):
         )
 
         extra_params = self.param_page.get_extra_params()
-        active_steps = self.param_page.get_active_steps()
+        active_steps = [sid for sid, cb in self.step_checkboxes.items() if cb.isChecked()]
 
         # 开始运行
         self._log("\n" + "=" * 60)
@@ -1807,6 +1922,8 @@ class MainWindow(QMainWindow):
         self._set_running_state(True)
         self.step_list.reset_all()
         self.progress_bar.setValue(0)
+        # 切换到「4. 任务运行」页，方便查看实时日志
+        self.tab_widget.setCurrentIndex(3)
 
         # 启动后台线程
         self.worker = AnalysisWorker(env, ctx, extra_params, active_steps)
@@ -1831,7 +1948,9 @@ class MainWindow(QMainWindow):
     def _set_running_state(self, running: bool):
         self.run_all_btn.setEnabled(not running)
         self.stop_btn.setEnabled(running)
-        self.tab_widget.setEnabled(not running)
+        # 运行时禁用各配置页，但保留「4. 任务运行」页可操作（查看日志、停止）
+        for page in (self.env_page, self.sample_page, self.param_page):
+            page.setEnabled(not running)
         if running:
             self.statusBar().showMessage("● 分析运行中...")
 
