@@ -44,7 +44,7 @@ from .env_manager import (
 )
 from .steps import PIPELINE_STEPS, StepStatus, AnalysisContext, SampleInfo
 from .pipeline import AnalysisWorker
-from .terminal_panel import TerminalPanel, launch_system_terminal
+from .terminal_panel import launch_system_terminal
 from . import __version__
 
 
@@ -463,14 +463,12 @@ class EnvSetupPage(QWidget):
                 self.retry_btn, self.create_env_btn, self.detect_btn,
             ):
                 w.setEnabled(False)
-            self.term_panel.set_busy(True)
         else:
             QApplication.restoreOverrideCursor()
             win = self.window()
             if isinstance(win, QMainWindow):
                 win.statusBar().showMessage("就绪")
             self._refresh_env_buttons()
-            self.term_panel.set_busy(False)
 
     def _refresh_env_buttons(self):
         """根据环境就绪状态刷新所有操作按钮"""
@@ -479,9 +477,9 @@ class EnvSetupPage(QWidget):
             self.install_btn, self.verify_btn, self.more_btn,
             self.custom_install_btn, self.uninstall_btn,
             self.uninstall_all_btn, self.retry_btn,
+            self.open_term_act, self.refresh_ver_act,
         ):
             w.setEnabled(ready)
-        # 终端面板的启用由 set_env_ready() 管理（环境就绪时激活）
 
     def _setup_ui(self):
         # 外层滚动区域（解决窗口小内容被挤压的问题）
@@ -606,6 +604,20 @@ class EnvSetupPage(QWidget):
         self.uninstall_all_btn.setEnabled(False)
         self.more_menu.addAction(self.uninstall_all_btn)
 
+        self.more_menu.addSeparator()
+
+        self.open_term_act = QAction("打开系统终端", self)
+        self.open_term_act.triggered.connect(self._open_system_terminal)
+        self.open_term_act.setToolTip("启动 UOS 系统终端，进入分析环境（conda activate + cd 工作目录）")
+        self.open_term_act.setEnabled(False)
+        self.more_menu.addAction(self.open_term_act)
+
+        self.refresh_ver_act = QAction("刷新已安装版本", self)
+        self.refresh_ver_act.triggered.connect(self._refresh_versions_from_env)
+        self.refresh_ver_act.setToolTip("在终端中安装/卸载软件后，从环境读取版本刷新表格")
+        self.refresh_ver_act.setEnabled(False)
+        self.more_menu.addAction(self.refresh_ver_act)
+
         self.more_btn = QPushButton("更多操作 ▾")
         self.more_btn.setMenu(self.more_menu)
         self.more_btn.setEnabled(False)
@@ -632,33 +644,7 @@ class EnvSetupPage(QWidget):
 
         layout.addWidget(group2)
 
-        # ---- 高级设置（默认隐藏，点击按钮展开） ----
-        self.adv_toggle_btn = QPushButton("▸ 高级设置（自定义安装 · 环境终端 · 命令日志）")
-        self.adv_toggle_btn.setCheckable(True)
-        self.adv_toggle_btn.setChecked(False)
-        self.adv_toggle_btn.setCursor(Qt.PointingHandCursor)
-        self.adv_toggle_btn.toggled.connect(self._toggle_advanced)
-        self.adv_toggle_btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: #34495e;
-                color: white;
-                padding: 8px 14px;
-                border-radius: 4px;
-                font-weight: bold;
-                text-align: left;
-            }}
-            QPushButton:hover {{ background-color: #2c3e50; }}
-        """)
-        layout.addWidget(self.adv_toggle_btn)
-
-        # 高级设置内容容器（默认隐藏）
-        self.adv_container = QWidget()
-        self.adv_container.setVisible(False)
-        adv_layout = QVBoxLayout(self.adv_container)
-        adv_layout.setContentsMargins(0, 8, 0, 0)
-        adv_layout.setSpacing(8)
-
-        # 自定义安装
+        # 自定义安装（装额外软件包，如 salmon / hisat2）
         custom_row = QHBoxLayout()
         custom_label = QLabel("自定义安装:")
         custom_label.setStyleSheet("color: #555;")
@@ -671,18 +657,9 @@ class EnvSetupPage(QWidget):
         self.custom_install_btn.clicked.connect(self._install_custom)
         self.custom_install_btn.setEnabled(False)
         custom_row.addWidget(self.custom_install_btn)
-        adv_layout.addLayout(custom_row)
+        g2_layout.addLayout(custom_row)
 
-        # 环境终端：调用 UOS 系统终端（原生体验，无卡顿）
-        self.term_panel = TerminalPanel()
-        self.term_panel.open_terminal_requested.connect(self._open_system_terminal)
-        # 用户点击「刷新已安装版本」按钮
-        self.term_panel.refresh_versions_requested.connect(
-            self._refresh_versions_from_env
-        )
-        adv_layout.addWidget(self.term_panel)
-
-        # 日志快捷按钮
+        # 日志快捷按钮（查看安装/验证的完整输出，显示在下方命令日志区）
         log_row = QHBoxLayout()
         log_row.addStretch()
         self.view_pkg_log_btn = QPushButton("查看选中包日志")
@@ -691,18 +668,27 @@ class EnvSetupPage(QWidget):
         self.view_last_log_btn = QPushButton("查看最近命令输出")
         self.view_last_log_btn.clicked.connect(self._view_last_log)
         log_row.addWidget(self.view_last_log_btn)
-        adv_layout.addLayout(log_row)
+        g2_layout.addLayout(log_row)
 
-        layout.addWidget(self.adv_container)
+        # 命令日志区（安装/验证操作的完整输出）
+        self.log_view = QPlainTextEdit()
+        self.log_view.setReadOnly(True)
+        self.log_view.setMinimumHeight(150)
+        self.log_view.setMaximumBlockCount(5000)
+        self.log_view.setPlaceholderText("命令日志区：安装/验证操作的完整输出显示在这里")
+        self.log_view.setStyleSheet("""
+            QPlainTextEdit {
+                background-color: #1e1e1e;
+                color: #d4d4d4;
+                font-family: "Consolas", "DejaVu Sans Mono", monospace;
+                font-size: 12px;
+                border: 1px solid #333;
+                border-radius: 6px;
+            }
+        """)
+        g2_layout.addWidget(self.log_view)
+
         layout.addStretch()
-
-    def _toggle_advanced(self, checked: bool):
-        """展开/收起高级设置"""
-        self.adv_container.setVisible(checked)
-        if checked:
-            self.adv_toggle_btn.setText("▾ 高级设置（点击收起）")
-        else:
-            self.adv_toggle_btn.setText("▸ 高级设置（自定义安装 · 环境终端 · 命令日志）")
 
     def _populate_pkg_table(self):
         """填充内置软件包列表（版本列留空，安装后显示实际版本）"""
@@ -763,7 +749,6 @@ class EnvSetupPage(QWidget):
                 self.create_env_btn.setText("重建环境")
                 self._env_ready = True
                 self._refresh_env_buttons()
-                self.term_panel.set_env_ready(True)
         elif info == "NEED_INSTALL":
             # 需要自动部署本地 Conda
             self.conda_path_edit.setText(os.path.join(get_local_conda_dir(), "bin", "conda"))
@@ -814,7 +799,6 @@ class EnvSetupPage(QWidget):
             self.conda_status_label.setStyleSheet(f"color: {COLORS['success']}; font-weight: bold;")
             self._env_ready = True
             self._refresh_env_buttons()
-            self.term_panel.set_env_ready(True)
         else:
             self.conda_status_label.setText(f"✗ 创建失败: {msg[:100]}")
             self.conda_status_label.setStyleSheet(f"color: {COLORS['error']};")
@@ -1103,7 +1087,7 @@ class EnvSetupPage(QWidget):
 
         env = self.get_env_manager()
         self._set_env_busy(True, f"正在安装 {spec}")
-        self.term_panel.append_log(f"\n$ 自定义安装: {spec}")
+        self._append_log(f"\n$ 自定义安装: {spec}")
 
         def task_fn():
             return env.install_custom_package(spec)
@@ -1112,7 +1096,7 @@ class EnvSetupPage(QWidget):
 
     def _on_custom_install_done(self, ok, msg, base_name):
         env = self.get_env_manager()
-        self.term_panel.append_log(env.last_log or msg)
+        self._append_log(env.last_log or msg)
 
         # 把自定义包加入表格（已存在则更新版本/状态）
         ver = env.get_package_version(base_name) if ok else ""
@@ -1154,18 +1138,27 @@ class EnvSetupPage(QWidget):
             lines.append(f"===== {pkg_name} 最近一次安装日志 =====\n")
             lines.append(env.get_package_log(pkg_name))
             lines.append("")
-        self.term_panel.show_log("\n".join(lines))
+        self._show_log("\n".join(lines))
 
     def _view_last_log(self):
         """查看最近一次 conda 命令的完整输出"""
         env = self.get_env_manager()
         if not env.last_log:
-            self.term_panel.show_log("（暂无命令记录，请先执行安装/验证操作）")
+            self._show_log("（暂无命令记录，请先执行安装/验证操作）")
             return
-        self.term_panel.show_log(
+        self._show_log(
             f"$ {env.last_cmd}\n\n{env.last_log}"
         )
 
+
+    def _append_log(self, text: str):
+        """追加日志到命令日志区"""
+        self.log_view.appendPlainText(text)
+        self.log_view.moveCursor(QTextCursor.End)
+
+    def _show_log(self, text: str):
+        """覆盖显示日志到命令日志区"""
+        self.log_view.setPlainText(text)
 
     def _open_system_terminal(self):
         """打开 UOS 系统终端，cd 到工作目录 + conda activate 进入分析环境"""
@@ -1178,7 +1171,7 @@ class EnvSetupPage(QWidget):
         if not ok:
             QMessageBox.warning(self, "打开终端失败", msg)
         else:
-            self.term_panel.append_log(
+            self._append_log(
                 f"$ 打开系统终端 ({msg}) — 已进入分析环境"
                 + (f"，工作目录: {work_dir}" if work_dir else "")
             )
