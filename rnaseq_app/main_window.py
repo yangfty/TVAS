@@ -109,20 +109,6 @@ def _btn_style(bg: str, hover: str, padding: str = "8px 20px") -> str:
     """
 
 
-_BTN_OUTLINE = """
-    QPushButton {
-        background-color: #fff;
-        color: #555;
-        padding: 8px 16px;
-        border: 1px solid #bdc3c7;
-        border-radius: 4px;
-        font-size: 13px;
-    }
-    QPushButton:hover { border-color: #7f8c8d; color: #333; }
-    QPushButton:disabled { color: #bdc3c7; border-color: #ecf0f1; }
-"""
-
-
 def group_style() -> str:
     """分组卡片统一样式（供多个页面共用）"""
     return f"""
@@ -661,19 +647,6 @@ class EnvSetupPage(QWidget):
         custom_row.addWidget(self.custom_install_btn)
         g2_layout.addLayout(custom_row)
 
-        # 日志快捷按钮（查看安装/验证的完整输出，显示在下方命令日志区）
-        log_row = QHBoxLayout()
-        log_row.addStretch()
-        self.view_pkg_log_btn = QPushButton("查看选中包日志")
-        self.view_pkg_log_btn.clicked.connect(self._view_pkg_log)
-        self.view_pkg_log_btn.setStyleSheet(_BTN_OUTLINE)
-        log_row.addWidget(self.view_pkg_log_btn)
-        self.view_last_log_btn = QPushButton("查看最近命令输出")
-        self.view_last_log_btn.clicked.connect(self._view_last_log)
-        self.view_last_log_btn.setStyleSheet(_BTN_OUTLINE)
-        log_row.addWidget(self.view_last_log_btn)
-        g2_layout.addLayout(log_row)
-
         layout.addStretch()
 
     def _populate_pkg_table(self):
@@ -1103,57 +1076,7 @@ class EnvSetupPage(QWidget):
         if ok:
             QMessageBox.information(self, "安装完成", msg)
         else:
-            QMessageBox.warning(self, "安装失败", f"{msg}\n\n点击「查看最近命令输出」查看详细日志")
-
-    def _view_pkg_log(self):
-        """查看选中软件包的安装日志"""
-        rows = sorted(set(idx.row() for idx in self.pkg_table.selectedIndexes()))
-        if not rows:
-            QMessageBox.information(self, "提示", "请先在表格中选中要查看日志的软件包")
-            return
-
-        env = self.get_env_manager()
-        lines = []
-        for row in rows:
-            pkg_item = self.pkg_table.item(row, 0)
-            if not pkg_item:
-                continue
-            pkg_name = pkg_item.text().strip()
-            lines.append(f"===== {pkg_name} 最近一次安装日志 =====\n")
-            lines.append(env.get_package_log(pkg_name))
-            lines.append("")
-        self._show_log_dialog("安装日志", "\n".join(lines))
-
-    def _view_last_log(self):
-        """查看最近一次 conda 命令的完整输出"""
-        env = self.get_env_manager()
-        if not env.last_log:
-            QMessageBox.information(self, "提示", "暂无命令记录，请先执行安装/验证操作")
-            return
-        self._show_log_dialog("最近命令输出", f"$ {env.last_cmd}\n\n{env.last_log}")
-
-
-    def _show_log_dialog(self, title: str, text: str):
-        """弹窗显示日志（可滚动查看长文本）"""
-        from PyQt5.QtWidgets import QDialog
-        dlg = QDialog(self)
-        dlg.setWindowTitle(title)
-        dlg.resize(700, 500)
-        v = QVBoxLayout(dlg)
-        edit = QPlainTextEdit()
-        edit.setReadOnly(True)
-        edit.setPlainText(text)
-        edit.setStyleSheet("""
-            QPlainTextEdit {
-                font-family: "Consolas", "DejaVu Sans Mono", monospace;
-                font-size: 12px;
-            }
-        """)
-        v.addWidget(edit)
-        btn = QPushButton("关闭")
-        btn.clicked.connect(dlg.accept)
-        v.addWidget(btn)
-        dlg.exec_()
+            QMessageBox.warning(self, "安装失败", msg)
 
     def _open_system_terminal(self):
         """打开 UOS 系统终端，cd 到工作目录 + conda activate 进入分析环境"""
@@ -1215,7 +1138,11 @@ class EnvSetupPage(QWidget):
 # ============================================================
 
 class SampleConfigPage(QWidget):
-    """样本配置页面"""
+    """样本配置页面（de novo 组装：选择 FASTQ 文件即自动配对 R1/R2）"""
+
+    # R1/R2 文件名识别模式（顺序优先匹配）
+    _R1_PATTERNS = ("_R1", "_1", "_r1", ".R1.")
+    _R2_PATTERNS = ("_R2", "_2", "_r2", ".R2.")
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1224,100 +1151,159 @@ class SampleConfigPage(QWidget):
     def _setup_ui(self):
         layout = QVBoxLayout(self)
 
-        group = QGroupBox("样本信息（Trinity samples_file 格式）")
+        group = QGroupBox("样本配置")
         group.setStyleSheet(group_style())
         g_layout = QVBoxLayout(group)
 
         # 说明
-        hint = QLabel("格式: 条件/分组 | 重复名 | R1文件路径 | R2文件路径")
-        hint.setStyleSheet("color: #888; font-size: 12px; margin-bottom: 8px;")
+        hint = QLabel(
+            "选择待组装的 FASTQ 测序文件，系统将按文件名自动配对 R1 / R2。\n"
+            "⚠ 暂时仅支持双端测序数据。"
+        )
+        hint.setStyleSheet("color: #666; font-size: 12px; margin-bottom: 8px;")
+        hint.setWordWrap(True)
         g_layout.addWidget(hint)
 
-        # 样本表格
+        # 样本表格：3 列（样本名 | R1 路径 | R2 路径），样本名可编辑
         self.sample_table = QTableWidget()
-        self.sample_table.setColumnCount(4)
-        self.sample_table.setHorizontalHeaderLabels(["条件/分组", "重复名", "R1 FASTQ 路径", "R2 FASTQ 路径"])
+        self.sample_table.setColumnCount(3)
+        self.sample_table.setHorizontalHeaderLabels(
+            ["样本名", "R1 FASTQ 路径", "R2 FASTQ 路径"]
+        )
         self.sample_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        self.sample_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        self.sample_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
         self.sample_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
-        self.sample_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Stretch)
         self.sample_table.verticalHeader().setVisible(False)
         self.sample_table.setAlternatingRowColors(True)
+        self.sample_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         g_layout.addWidget(self.sample_table)
 
-        # 按钮
+        # 操作按钮
         btn_layout = QHBoxLayout()
-        self.add_row_btn = QPushButton("+ 添加样本")
-        self.add_row_btn.clicked.connect(self._add_row)
+        self.import_files_btn = QPushButton("📂 选择 FASTQ 文件")
+        self.import_files_btn.setToolTip("多选 FASTQ 文件，系统按文件名 _R1/_R2 自动配对填入下表")
+        self.import_files_btn.clicked.connect(self._import_fastq_files)
         self.del_row_btn = QPushButton("− 删除选中")
         self.del_row_btn.clicked.connect(self._delete_row)
-        self.import_btn = QPushButton("从 samples_file 导入")
-        self.import_btn.clicked.connect(self._import_samples_file)
         self.clear_btn = QPushButton("清空")
-        self.clear_btn.clicked.connect(lambda: self.sample_table.setRowCount(0))
+        self.clear_btn.clicked.connect(self._clear_all)
 
-        btn_layout.addWidget(self.add_row_btn)
+        btn_layout.addWidget(self.import_files_btn)
         btn_layout.addWidget(self.del_row_btn)
-        btn_layout.addWidget(self.import_btn)
         btn_layout.addWidget(self.clear_btn)
         btn_layout.addStretch()
         g_layout.addLayout(btn_layout)
 
+        # 配对说明
+        pair_hint = QLabel(
+            "配对规则: 文件名包含 _R1/_1 匹配为 R1，_R2/_2 匹配为 R2；"
+            "样本名取 R1 文件名去掉 _R1 后缀（可手动修改）。"
+        )
+        pair_hint.setStyleSheet("color: #7f8c8d; font-size: 11px; margin-top: 6px;")
+        pair_hint.setWordWrap(True)
+        g_layout.addWidget(pair_hint)
+
         layout.addWidget(group)
         layout.addStretch()
 
-    def _add_row(self):
+    # ---- 文件选择与自动配对 ----
+
+    def _import_fastq_files(self):
+        """多选 FASTQ 文件，自动按文件名配对 R1/R2 填入表格"""
+        paths, _ = QFileDialog.getOpenFileNames(
+            self, "选择 FASTQ 测序文件（可多选）", "",
+            "FASTQ 文件 (*.fastq *.fq *.fastq.gz *.fq.gz);;所有文件 (*)"
+        )
+        if not paths:
+            return
+
+        # 按文件名 base 配对
+        pairs = {}  # base -> {"r1": path, "r2": path}
+        for p in paths:
+            fname = os.path.basename(p)
+            base, role = self._detect_role(fname)
+            entry = pairs.setdefault(base, {"r1": "", "r2": "", "unpaired": []})
+            if role == "r1" and not entry["r1"]:
+                entry["r1"] = p
+            elif role == "r2" and not entry["r2"]:
+                entry["r2"] = p
+            else:
+                entry["unpaired"].append(p)
+
+        # 填入表格
+        added = 0
+        unpaired = []
+        for base, entry in pairs.items():
+            if entry["r1"] and entry["r2"]:
+                self._add_paired_row(base, entry["r1"], entry["r2"])
+                added += 1
+            else:
+                unpaired.extend(entry["unpaired"])
+
+        msg = f"已自动配对 {added} 个样本。"
+        if unpaired:
+            msg += (
+                f"\n\n以下 {len(unpaired)} 个文件未能配对（缺少对应的 R1/R2），已忽略：\n  "
+                + "\n  ".join(os.path.basename(p) for p in unpaired[:10])
+            )
+            if len(unpaired) > 10:
+                msg += f"\n  ...等共 {len(unpaired)} 个"
+            msg += "\n\n请确认文件名包含 _R1/_R2（或 _1/_2）后缀。"
+        QMessageBox.information(self, "导入完成", msg)
+
+    def _detect_role(self, fname: str):
+        """从文件名识别样本 base 名和 R1/R2 角色，返回 (base, 'r1'|'r2'|'')"""
+        for pat in self._R1_PATTERNS:
+            idx = fname.find(pat)
+            if idx > 0:
+                return fname[:idx], "r1"
+        for pat in self._R2_PATTERNS:
+            idx = fname.find(pat)
+            if idx > 0:
+                return fname[:idx], "r2"
+        # 无法识别时用完整文件名（去扩展名）作为 base，标记为未知
+        return os.path.splitext(fname)[0], ""
+
+    def _add_paired_row(self, base: str, r1: str, r2: str):
         row = self.sample_table.rowCount()
         self.sample_table.insertRow(row)
-        for col in range(4):
-            item = QTableWidgetItem("")
-            self.sample_table.setItem(row, col, item)
+        name_item = QTableWidgetItem(base)
+        name_item.setToolTip("样本名（可手动修改），用于组装结果命名")
+        r1_item = QTableWidgetItem(r1)
+        r1_item.setToolTip(r1)
+        r1_item.setFlags(r1_item.flags() & ~Qt.ItemIsEditable)
+        r2_item = QTableWidgetItem(r2)
+        r2_item.setToolTip(r2)
+        r2_item.setFlags(r2_item.flags() & ~Qt.ItemIsEditable)
+        self.sample_table.setItem(row, 0, name_item)
+        self.sample_table.setItem(row, 1, r1_item)
+        self.sample_table.setItem(row, 2, r2_item)
+
+    # ---- 表格操作 ----
 
     def _delete_row(self):
         rows = set(idx.row() for idx in self.sample_table.selectedIndexes())
         for row in sorted(rows, reverse=True):
             self.sample_table.removeRow(row)
 
-    def _import_samples_file(self):
-        path, _ = QFileDialog.getOpenFileName(
-            self, "选择 Trinity samples_file", "",
-            "文本文件 (*.txt *.tsv *.csv);;所有文件 (*)"
-        )
-        if not path:
-            return
-
+    def _clear_all(self):
         self.sample_table.setRowCount(0)
-        with open(path, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith("#"):
-                    continue
-                parts = line.split("\t")
-                if len(parts) >= 4:
-                    row = self.sample_table.rowCount()
-                    self.sample_table.insertRow(row)
-                    self.sample_table.setItem(row, 0, QTableWidgetItem(parts[0]))
-                    self.sample_table.setItem(row, 1, QTableWidgetItem(parts[1]))
-                    self.sample_table.setItem(row, 2, QTableWidgetItem(parts[2]))
-                    self.sample_table.setItem(row, 3, QTableWidgetItem(parts[3]))
 
     def get_samples(self) -> List[SampleInfo]:
-        """获取所有样本信息"""
+        """获取所有样本信息（de novo 组装：group 与 replicate 均取样本名）"""
         samples = []
         for row in range(self.sample_table.rowCount()):
-            group = self.sample_table.item(row, 0)
-            repl = self.sample_table.item(row, 1)
-            r1 = self.sample_table.item(row, 2)
-            r2 = self.sample_table.item(row, 3)
-
-            if group and repl and r1 and r2:
-                g = group.text().strip()
-                r = repl.text().strip()
+            name_item = self.sample_table.item(row, 0)
+            r1 = self.sample_table.item(row, 1)
+            r2 = self.sample_table.item(row, 2)
+            if name_item and r1 and r2:
+                name = name_item.text().strip()
                 r1_path = r1.text().strip()
                 r2_path = r2.text().strip()
-                if g and r and r1_path:
+                if name and r1_path and r2_path:
+                    # de novo 组装不需要真实分组，group/replicate 均用样本名
                     samples.append(SampleInfo(
-                        group=g, replicate=r,
+                        group=name, replicate=name,
                         r1_path=r1_path, r2_path=r2_path
                     ))
         return samples
@@ -1339,41 +1325,65 @@ class ParamConfigPage(QWidget):
         self._setup_ui()
 
     def _setup_ui(self):
-        layout = QVBoxLayout(self)
+        # 外层：滚动区域，窗口较小时也能完整浏览所有参数
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setStyleSheet("QScrollArea { background: transparent; }")
+        outer.addWidget(scroll)
+
+        content = QWidget()
+        scroll.setWidget(content)
+        layout = QVBoxLayout(content)
+        layout.setSpacing(16)
+        layout.setContentsMargins(12, 12, 12, 12)
 
         # ---- 基本参数 ----
         group1 = QGroupBox("基本参数")
         group1.setStyleSheet(group_style())
         g1 = QFormLayout(group1)
+        g1.setLabelAlignment(Qt.AlignRight)
+        g1.setFormAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        g1.setSpacing(12)
+        g1.setContentsMargins(16, 22, 16, 16)
 
         self.work_dir_edit = QLineEdit()
         self.work_dir_edit.setPlaceholderText("选择分析输出目录...")
+        self.work_dir_edit.setToolTip("所有分析结果（FASTQC报告、清洗后的reads、Trinity组装结果等）将输出到此目录下的子文件夹")
         browse_btn = QPushButton("浏览...")
         browse_btn.clicked.connect(self._browse_work_dir)
         dir_layout = QHBoxLayout()
         dir_layout.addWidget(self.work_dir_edit)
         dir_layout.addWidget(browse_btn)
-        g1.addRow("工作目录:", dir_layout)
+        work_dir_label = QLabel("工作目录:")
+        work_dir_label.setToolTip("分析结果将输出到此目录下的各子文件夹")
+        g1.addRow(work_dir_label, dir_layout)
         work_dir_hint = QLabel(
             "分析结果将输出到此目录下的各子文件夹"
             "（01_fastqc_out / 02_fastp_clean / 04_trinity_out 等）"
         )
-        work_dir_hint.setStyleSheet("color: #888; font-size: 11px;")
+        work_dir_hint.setStyleSheet("color: #7f8c8d; font-size: 12px;")
+        work_dir_hint.setWordWrap(True)
         g1.addRow("", work_dir_hint)
 
         self.prefix_edit = QLineEdit()
         self.prefix_edit.setText(self.config.species_prefix)
         self.prefix_edit.setPlaceholderText("如 Hvi")
+        self.prefix_edit.setToolTip("组装后的转录本序列命名前缀，如 Hvi_TRINITY_DN1000_c0_g1")
         g1.addRow("物种前缀:", self.prefix_edit)
 
         self.gene_prefix_edit = QLineEdit()
         self.gene_prefix_edit.setText(self.config.gene_prefix)
         self.gene_prefix_edit.setPlaceholderText("如 Uni")
+        self.gene_prefix_edit.setToolTip("基因命名前缀，用于最终的重命名步骤统一基因ID格式")
         g1.addRow("基因前缀:", self.gene_prefix_edit)
 
         self.thread_spin = QSpinBox()
         self.thread_spin.setRange(1, 128)
         self.thread_spin.setValue(self.config.default_threads)
+        self.thread_spin.setToolTip("分配给各步骤的CPU线程数，建议不超过物理核心数；Trinity/CD-HIT等会用到")
         g1.addRow("CPU 线程:", self.thread_spin)
 
         layout.addWidget(group1)
@@ -1382,16 +1392,21 @@ class ParamConfigPage(QWidget):
         group2 = QGroupBox("Fastp 过滤参数")
         group2.setStyleSheet(group_style())
         g2 = QFormLayout(group2)
+        g2.setLabelAlignment(Qt.AlignRight)
+        g2.setSpacing(12)
+        g2.setContentsMargins(16, 22, 16, 16)
 
         fp = self.config.fastp_params()
         self.fp_q_spin = QSpinBox()
         self.fp_q_spin.setRange(10, 40)
         self.fp_q_spin.setValue(fp.get("quality_threshold", 20))
+        self.fp_q_spin.setToolTip("Phred质量阈值，低于此值的碱基将被截断（-q 参数）。值越高过滤越严格")
         g2.addRow("质量阈值 (-q):", self.fp_q_spin)
 
         self.fp_l_spin = QSpinBox()
         self.fp_l_spin.setRange(20, 200)
         self.fp_l_spin.setValue(fp.get("min_length", 50))
+        self.fp_l_spin.setToolTip("过滤后reads的最小保留长度（-l 参数），短于此值的reads将被丢弃")
         g2.addRow("最小长度 (-l):", self.fp_l_spin)
 
         layout.addWidget(group2)
@@ -1400,10 +1415,18 @@ class ParamConfigPage(QWidget):
         group3 = QGroupBox("Trinity 组装参数")
         group3.setStyleSheet(group_style())
         g3 = QFormLayout(group3)
+        g3.setLabelAlignment(Qt.AlignRight)
+        g3.setSpacing(12)
+        g3.setContentsMargins(16, 22, 16, 16)
 
         self.tr_mem_edit = QLineEdit()
         self.tr_mem_edit.setText(self.config.trinity_params().get("max_memory", "50G"))
+        self.tr_mem_edit.setToolTip("Trinity组装可用的最大内存（--max_memory）。格式如 50G、100G，建议设为物理内存的80%")
+        tr_hint = QLabel("格式: 数字+单位（如 50G / 100G），建议设为物理内存的 80%")
+        tr_hint.setStyleSheet("color: #7f8c8d; font-size: 12px;")
+        tr_hint.setWordWrap(True)
         g3.addRow("最大内存 (--max_memory):", self.tr_mem_edit)
+        g3.addRow("", tr_hint)
 
         layout.addWidget(group3)
 
@@ -1411,6 +1434,9 @@ class ParamConfigPage(QWidget):
         group4 = QGroupBox("CD-HIT 去冗余参数")
         group4.setStyleSheet(group_style())
         g4 = QFormLayout(group4)
+        g4.setLabelAlignment(Qt.AlignRight)
+        g4.setSpacing(12)
+        g4.setContentsMargins(16, 22, 16, 16)
 
         ch = self.config.cd_hit_params()
         self.ch_identity_spin = QDoubleSpinBox()
@@ -1418,7 +1444,12 @@ class ParamConfigPage(QWidget):
         self.ch_identity_spin.setSingleStep(0.05)
         self.ch_identity_spin.setValue(ch.get("identity_threshold", 0.80))
         self.ch_identity_spin.setDecimals(2)
+        self.ch_identity_spin.setToolTip("序列相似性阈值（-c）。0.80 表示80%相似度的转录本聚为一类去冗余，值越高保留越多")
+        ch_hint = QLabel("范围 0.70~1.00。0.80=较宽松去冗余，0.95=较严格保留更多转录本")
+        ch_hint.setStyleSheet("color: #7f8c8d; font-size: 12px;")
+        ch_hint.setWordWrap(True)
         g4.addRow("相似性阈值 (-c):", self.ch_identity_spin)
+        g4.addRow("", ch_hint)
 
         layout.addWidget(group4)
 
@@ -1426,6 +1457,12 @@ class ParamConfigPage(QWidget):
         group5 = QGroupBox("执行步骤选择")
         group5.setStyleSheet(group_style())
         g5_layout = QVBoxLayout(group5)
+        g5_layout.setSpacing(8)
+        g5_layout.setContentsMargins(16, 22, 16, 16)
+
+        step_hint = QLabel("De Novo 组装流程的 11 个步骤均为必需，暂不支持跳过。")
+        step_hint.setStyleSheet("color: #7f8c8d; font-size: 12px; margin-bottom: 4px;")
+        g5_layout.addWidget(step_hint)
 
         self.step_checkboxes = {}
         for step in PIPELINE_STEPS:

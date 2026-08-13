@@ -165,33 +165,20 @@ class CondaEnvManager:
     def __init__(self, env_name: str, conda_path: str = ""):
         self.env_name = env_name
         self._conda_exe = self._resolve_conda(conda_path)
-        # 操作日志（供高级设置查看）
-        self.last_log: str = ""           # 最近一次命令的完整输出
-        self.last_cmd: str = ""           # 最近一次命令
-        self.pkg_logs: dict = {}          # 包名 -> 最近一次安装的完整输出
 
-    # ---- 统一命令执行（记录完整日志） ----
+    # ---- 统一命令执行 ----
 
     def _exec(self, cmd: List[str], timeout: int, cwd: str = "") -> Tuple[int, str, str]:
-        """
-        执行 conda 命令并记录完整输出到 self.last_log
-        返回: (returncode, stdout, stderr)
-        """
-        self.last_cmd = " ".join(cmd)
+        """执行 conda 命令，返回 (returncode, stdout, stderr)"""
         try:
             result = subprocess.run(
                 cmd, capture_output=True, text=True,
                 timeout=timeout, cwd=cwd or None, env=_conda_env(),
             )
-            self.last_log = result.stdout
-            if result.stderr:
-                self.last_log += "\n[stderr]\n" + result.stderr
             return result.returncode, result.stdout, result.stderr
         except subprocess.TimeoutExpired:
-            self.last_log = f"命令超时（>{timeout}秒）"
-            return -1, "", self.last_log
+            return -1, "", f"命令超时（>{timeout}秒）"
         except Exception as e:
-            self.last_log = str(e)
             return -1, "", str(e)
 
     # ---- Conda 解析（自包含优先） ----
@@ -430,7 +417,6 @@ class CondaEnvManager:
         """卸载环境中的单个软件包"""
         cmd = [self._conda_exe, "remove", "-n", self.env_name, "-y", pkg_name]
         rc, out, err = self._exec(cmd, 600)
-        self.pkg_logs[pkg_name] = self.last_log
         if rc == 0:
             return True, f"✓ {pkg_name} 卸载成功"
         if "packages not found" in (out + err).lower() or "no packages" in (out + err).lower():
@@ -447,7 +433,6 @@ class CondaEnvManager:
         cmd = [self._conda_exe, "env", "remove", "-n", self.env_name, "-y"]
         rc, out, err = self._exec(cmd, 300)
         if rc == 0:
-            self.pkg_logs.clear()
             return True, f"环境 '{self.env_name}' 已删除"
         return False, f"删除失败: {(err or out)[-300:]}"
 
@@ -488,7 +473,6 @@ class CondaEnvManager:
         cmd.append(pkg_spec)
 
         rc, out, err = self._exec(cmd, 600)
-        self.pkg_logs[pkg.name] = self.last_log
 
         if rc == 0:
             ver = self.get_package_version(pkg.name)
@@ -524,8 +508,6 @@ class CondaEnvManager:
                "-c", "bioconda", "-c", "conda-forge", spec]
 
         rc, out, err = self._exec(cmd, 600)
-        if base_name:
-            self.pkg_logs[base_name] = self.last_log
 
         if rc == 0:
             ver = self.get_package_version(base_name) if base_name else ""
@@ -542,10 +524,6 @@ class CondaEnvManager:
         if advice:
             msg += f"\n\n{advice}"
         return False, msg
-
-    def get_package_log(self, pkg_name: str) -> str:
-        """获取某软件包最近一次安装的完整日志"""
-        return self.pkg_logs.get(pkg_name, "(无记录)")
 
     def install_all_packages(self, progress_callback=None) -> List[Tuple[str, bool, str]]:
         results = []
