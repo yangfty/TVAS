@@ -1187,13 +1187,20 @@ class EnvSetupPage(QWidget):
             for i, name in enumerate(pkg_names):
                 ver = env.get_package_version(name) if name else ""
                 results.append((i, ver))
-            return True, results
+            # 结果存到实例属性，on_done 从这里读
+            # （EnvTaskWorker 会把第二个返回值 str() 化，不能直接传 list）
+            self._refresh_results = results
+            installed = sum(1 for _, v in results if v)
+            return True, f"已安装 {installed}/{len(results)}"
 
-        def on_done(ok, results):
+        def on_done(ok, msg):
+            results = getattr(self, "_refresh_results", [])
             if ok and results:
                 for row, ver in results:
                     if ver:
-                        self.pkg_table.item(row, 1).setText(ver)
+                        ver_item = self.pkg_table.item(row, 1)
+                        if ver_item:
+                            ver_item.setText(ver)
                         status_item = self.pkg_table.item(row, 3)
                         if status_item and status_item.text() in ("未安装", "等待安装..."):
                             status_item.setText("✓ 已安装")

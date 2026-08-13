@@ -1,3 +1,10 @@
+tvas (0.1.1) unstable; urgency=medium
+
+  * 修复点击「刷新已安装版本」闪退问题（任务结果被 str() 化导致解包失败）
+  * 环境任务结果统一存实例属性，on_done 不再依赖信号回传的字符串
+
+ -- RNA-seq Analysis Tools <dev@example.com>  Thu, 13 Aug 2026 10:00:00 +0800
+
 tvas (0.1.0) unstable; urgency=medium
 
   * 开源协议变更为 GPL v3（与 PyQt5 / QTermWidget 依赖一致）

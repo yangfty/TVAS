@@ -6,6 +6,21 @@
 
 ---
 
+## [0.1.1] - 2026-08-13
+
+### 修复
+- **修复点击「刷新已安装版本」闪退问题**：
+  - 根因：`_refresh_versions_from_env` 的 `task_fn` 把结果列表作为元组第二项返回，
+    被 `EnvTaskWorker.run()` 统一 `str()` 化后，`on_done` 中 `for row, ver in results:`
+    在字符串上解包引发 `ValueError: not enough values to unpack`，异常逃逸到 Qt 信号
+    回调导致进程崩溃
+  - 修复：与其他 conda 任务（安装/验证/卸载）保持一致 — 结果存到实例属性
+    `self._refresh_results`，`task_fn` 只回传字符串摘要；`on_done` 从实例属性读取，
+    并对 `pkg_table.item(...)` 做空值保护
+  - 顺便对版本单元格补 `None` 判断，避免空表格行再次触发 AttributeError
+
+---
+
 ## [0.1.0] - 2026-08-07
 
 ### 变更
