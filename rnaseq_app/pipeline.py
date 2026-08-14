@@ -32,6 +32,8 @@ class PipelineState:
     total_steps: int = 0
     # 选择要执行的步骤 (默认全部)
     active_step_ids: List[str] = field(default_factory=list)
+    # 续跑模式：跳过输出已存在的步骤
+    resume_mode: bool = False
 
 
 class PipelineRunner:
@@ -96,8 +98,13 @@ class PipelineRunner:
     def run_all(self) -> List[StepResult]:
         """执行所有选中的步骤"""
         self.state.is_running = True
+        self.state.is_cancelled = False
         self.state.start_time = time.time()
         self.state.step_results = []
+        # 重置 env 取消标志
+        self.env.reset_cancel()
+        # 设置续跑模式到上下文，供步骤函数检查
+        self.ctx.resume_mode = self.state.resume_mode
 
         # 确定要执行的步骤
         active_ids = self.state.active_step_ids
@@ -114,10 +121,13 @@ class PipelineRunner:
         self._log(f"  线程数: {self.ctx.threads}")
         self._log(f"  样本数: {len(self.ctx.samples)}")
         self._log(f"  执行步骤: {len(steps_to_run)} 个")
+        if self.state.resume_mode:
+            self._log("  ⚡ 续跑模式：已完成的步骤将自动跳过")
         self._log("=" * 60)
 
         for i, step_def in enumerate(steps_to_run):
-            if self.state.is_cancelled:
+            # 取消检查（步骤开始前）
+            if self.state.is_cancelled or self.env.is_cancelled:
                 self._log("\n⚠ 流程已被用户取消")
                 break
 
@@ -160,7 +170,7 @@ class PipelineRunner:
                     self._log(f"  错误: {result.message}")
                     break
                 else:
-                    self._on_step_change(step_id, StepStatus.SUCCESS)
+                    self._on_step_change(step_id, result.status)
                     elapsed = result.duration_sec
                     if elapsed > 60:
                         self._log(f"\n✓ {step_name} 完成 (耗时 {elapsed/60:.1f} 分钟)")
@@ -183,10 +193,16 @@ class PipelineRunner:
         total_elapsed = time.time() - self.state.start_time
         success_count = sum(
             1 for r in self.state.step_results
-            if r.status == StepStatus.SUCCESS
+            if r.status in (StepStatus.SUCCESS, StepStatus.SKIPPED)
         )
+        cancelled = self.state.is_cancelled or self.env.is_cancelled
+
         self._log(f"\n{'=' * 60}")
-        self._log(f"  流程结束: {success_count}/{self.state.total_steps} 步骤成功")
+        if cancelled:
+            self._log(f"  流程已停止: {success_count}/{self.state.total_steps} 步骤完成")
+            self._log("  💡 可点击「续跑」从停止处继续运行")
+        else:
+            self._log(f"  流程结束: {success_count}/{self.state.total_steps} 步骤成功")
         self._log(f"  总耗时: {total_elapsed/60:.1f} 分钟")
         self._log(f"{'=' * 60}")
 
@@ -200,9 +216,11 @@ class PipelineRunner:
         return self.state.step_results
 
     def cancel(self):
-        """取消运行"""
+        """取消运行：立即终止当前命令并设置取消标志"""
         self.state.is_cancelled = True
-        self._log("\n⚠ 正在取消流程...")
+        # 立即终止正在运行的子进程（关键：不等待自然结束）
+        self.env.cancel_current_command()
+        self._log("\n⚠ 正在停止流程，终止当前命令...")
 
 
 # ============================================================
@@ -228,12 +246,14 @@ class AnalysisWorker(QThread):
     def __init__(self, env: CondaEnvManager, ctx: AnalysisContext,
                  extra_params: dict = None,
                  active_steps: List[str] = None,
+                 resume_mode: bool = False,
                  parent=None):
         super().__init__(parent)
         self.env = env
         self.ctx = ctx
         self.extra_params = extra_params or {}
         self.active_steps = active_steps or []
+        self.resume_mode = resume_mode
         self._runner: Optional[PipelineRunner] = None
 
     def run(self):
@@ -241,6 +261,7 @@ class AnalysisWorker(QThread):
         try:
             self._runner = PipelineRunner(self.env, self.ctx, self.extra_params)
             self._runner.state.active_step_ids = self.active_steps
+            self._runner.state.resume_mode = self.resume_mode
             self._runner.set_callbacks(
                 log=self._emit_log,
                 progress=self._emit_progress,

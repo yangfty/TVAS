@@ -92,6 +92,13 @@ class AnalysisContext:
     final_cds: str = ""
     final_pep: str = ""
 
+    # 智能依赖追踪：记录实际可用的上游产物路径
+    # Trinity 输入源: rcorrector > fastp > 原始fq（哪个步骤跑了就用哪个的输出）
+    trinity_input_stage: str = ""          # "rcorrector" | "fastp" | "raw"
+
+    # 续跑模式：True 时步骤输出已存在则跳过
+    resume_mode: bool = False
+
 
 # ============================================================
 # 步骤函数
@@ -111,6 +118,15 @@ def step_fastqc(env: CondaEnvManager, ctx: AnalysisContext,
         return result
 
     out_dir = os.path.join(ctx.work_dir, "01_fastqc_out")
+
+    # 续跑模式：检查输出目录是否已存在且有内容
+    if ctx.resume_mode and os.path.isdir(out_dir) and os.listdir(out_dir):
+        ctx.fastqc_dir = out_dir
+        result.status = StepStatus.SKIPPED
+        result.message = f"输出已存在，续跑模式跳过: {out_dir}"
+        log(f"  ⚡ 跳过（输出已存在）: {out_dir}")
+        return result
+
     os.makedirs(out_dir, exist_ok=True)
     ctx.fastqc_dir = out_dir
 
@@ -119,6 +135,11 @@ def step_fastqc(env: CondaEnvManager, ctx: AnalysisContext,
 
     total = len(ctx.samples)
     for i, sample in enumerate(ctx.samples):
+        # 取消检查
+        if env.is_cancelled:
+            result.status = StepStatus.FAILED
+            result.message = "用户取消"
+            return result
         progress(int((i / total) * 100))
         log(f"  [{i+1}/{total}] {sample.replicate} ...")
 
@@ -156,6 +177,17 @@ def step_fastp(env: CondaEnvManager, ctx: AnalysisContext,
         return result
 
     out_dir = os.path.join(ctx.work_dir, "02_fastp_clean")
+
+    # 续跑模式：检查输出目录是否已存在且有内容
+    if ctx.resume_mode and os.path.isdir(out_dir) and os.listdir(out_dir):
+        ctx.fastp_dir = out_dir
+        # 续跑时也需告知下游 Trinity 使用 fastp 输出
+        ctx.trinity_input_stage = "fastp"
+        result.status = StepStatus.SKIPPED
+        result.message = f"输出已存在，续跑模式跳过: {out_dir}"
+        log(f"  ⚡ 跳过（输出已存在）: {out_dir}")
+        return result
+
     os.makedirs(out_dir, exist_ok=True)
     ctx.fastp_dir = out_dir
 
@@ -165,6 +197,11 @@ def step_fastp(env: CondaEnvManager, ctx: AnalysisContext,
 
     total = len(ctx.samples)
     for i, sample in enumerate(ctx.samples):
+        # 取消检查
+        if env.is_cancelled:
+            result.status = StepStatus.FAILED
+            result.message = "用户取消"
+            return result
         progress(int((i / total) * 100))
         log(f"  [{i+1}/{total}] {sample.replicate} ...")
 
@@ -188,6 +225,8 @@ def step_fastp(env: CondaEnvManager, ctx: AnalysisContext,
             log(f"    ✗ {sample.replicate} 失败: {output[-200:]}")
 
     progress(100)
+    # 成功时标记 Trinity 输入源为 fastp
+    ctx.trinity_input_stage = "fastp"
     result.status = StepStatus.SUCCESS
     result.message = f"Fastp 过滤完成，输出目录: {out_dir}"
     return result
@@ -198,13 +237,24 @@ def step_rcorrector(env: CondaEnvManager, ctx: AnalysisContext,
     """步骤3: Rcorrector 纠错"""
     result = StepResult("rcorrector", "Rcorrector 纠错")
 
+    out_dir = os.path.join(ctx.work_dir, "03_rcorrector")
+
+    # 续跑模式：检查输出目录是否已存在且有内容
+    if ctx.resume_mode and os.path.isdir(out_dir) and os.listdir(out_dir):
+        ctx.rcorrector_dir = out_dir
+        # 续跑时也需告知下游 Trinity 使用 rcorrector 输出
+        ctx.trinity_input_stage = "rcorrector"
+        result.status = StepStatus.SKIPPED
+        result.message = f"输出已存在，续跑模式跳过: {out_dir}"
+        log(f"  ⚡ 跳过（输出已存在）: {out_dir}")
+        return result
+
     fastp_dir = ctx.fastp_dir or os.path.join(ctx.work_dir, "02_fastp_clean")
     if not os.path.isdir(fastp_dir):
         result.status = StepStatus.SKIPPED
         result.message = f"Fastp 输出目录不存在: {fastp_dir}，请先运行 Fastp"
         return result
 
-    out_dir = os.path.join(ctx.work_dir, "03_rcorrector")
     os.makedirs(out_dir, exist_ok=True)
     ctx.rcorrector_dir = out_dir
 
@@ -235,6 +285,11 @@ def step_rcorrector(env: CondaEnvManager, ctx: AnalysisContext,
 
     total = len(ctx.samples)
     for i, sample in enumerate(ctx.samples):
+        # 取消检查
+        if env.is_cancelled:
+            result.status = StepStatus.FAILED
+            result.message = "用户取消"
+            return result
         progress(int((i / total) * 100))
         log(f"  [{i+1}/{total}] {sample.replicate} ...")
 
@@ -258,6 +313,8 @@ def step_rcorrector(env: CondaEnvManager, ctx: AnalysisContext,
             log(f"    ✗ {sample.replicate} 失败: {output[-200:]}")
 
     progress(100)
+    # 成功时标记 Trinity 输入源为 rcorrector
+    ctx.trinity_input_stage = "rcorrector"
     result.status = StepStatus.SUCCESS
     result.message = f"Rcorrector 纠错完成，输出目录: {out_dir}"
     return result
@@ -269,18 +326,48 @@ def step_trinity_assemble(env: CondaEnvManager, ctx: AnalysisContext,
     """步骤4: Trinity 组装"""
     result = StepResult("trinity", "Trinity 组装")
 
-    rcorrector_dir = ctx.rcorrector_dir or os.path.join(ctx.work_dir, "03_rcorrector")
     out_dir = os.path.join(ctx.work_dir, "04_trinity_out")
+
+    # 续跑模式：检查 Trinity.fasta 是否已存在
+    trinity_fa_existing = os.path.join(out_dir, "Trinity.fasta")
+    if ctx.resume_mode and os.path.isfile(trinity_fa_existing):
+        ctx.trinity_dir = out_dir
+        ctx.trinity_fasta = trinity_fa_existing
+        result.status = StepStatus.SKIPPED
+        result.message = f"输出已存在，续跑模式跳过: {trinity_fa_existing}"
+        log(f"  ⚡ 跳过（输出已存在）: {trinity_fa_existing}")
+        return result
+
     os.makedirs(out_dir, exist_ok=True)
     ctx.trinity_dir = out_dir
 
-    # 生成 samples_file (Trinity 要求的格式)
+    # 智能选择输入源：根据上游实际运行情况选择 reads 来源
+    # rcorrector > fastp > 原始fq
+    input_stage = ctx.trinity_input_stage or "raw"
+    if input_stage == "rcorrector":
+        rcorrector_dir = ctx.rcorrector_dir or os.path.join(ctx.work_dir, "03_rcorrector")
+        log(f"  输入源: Rcorrector 输出 ({rcorrector_dir})")
+    elif input_stage == "fastp":
+        fastp_dir = ctx.fastp_dir or os.path.join(ctx.work_dir, "02_fastp_clean")
+        log(f"  输入源: Fastp 输出 ({fastp_dir})")
+    else:
+        log("  输入源: 原始 FASTQ 文件")
+
+    # 生成 samples_file (Trinity 要求的格式)，根据输入源写不同路径
     samples_file = os.path.join(ctx.work_dir, "trinity_samples.txt")
     with open(samples_file, "w", encoding="utf-8") as f:
         for s in ctx.samples:
-            r1_cor = os.path.join(rcorrector_dir, f"{s.replicate}_R1_clean.cor.fq.gz")
-            r2_cor = os.path.join(rcorrector_dir, f"{s.replicate}_R2_clean.cor.fq.gz")
-            f.write(f"{s.group}\t{s.replicate}\t{r1_cor}\t{r2_cor}\n")
+            if input_stage == "rcorrector":
+                r1_in = os.path.join(rcorrector_dir, f"{s.replicate}_R1_clean.cor.fq.gz")
+                r2_in = os.path.join(rcorrector_dir, f"{s.replicate}_R2_clean.cor.fq.gz")
+            elif input_stage == "fastp":
+                r1_in = os.path.join(fastp_dir, f"{s.replicate}_R1_clean.fq.gz")
+                r2_in = os.path.join(fastp_dir, f"{s.replicate}_R2_clean.fq.gz")
+            else:
+                # 原始 fq
+                r1_in = s.r1_path
+                r2_in = s.r2_path
+            f.write(f"{s.group}\t{s.replicate}\t{r1_in}\t{r2_in}\n")
 
     result.status = StepStatus.RUNNING
     log(f"▶ Trinity 组装开始 (max_memory={max_memory}, CPU={ctx.threads})...")
@@ -293,6 +380,12 @@ def step_trinity_assemble(env: CondaEnvManager, ctx: AnalysisContext,
         f"--output {out_dir}"
     )
     ok, output = env.run_in_env(cmd, cwd=ctx.work_dir, timeout=86400 * 3)  # 最多3天
+
+    # 取消检查
+    if env.is_cancelled:
+        result.status = StepStatus.FAILED
+        result.message = "用户取消"
+        return result
 
     if ok:
         # 查找 Trinity.fasta
@@ -330,9 +423,17 @@ def step_longest_isoform(env: CondaEnvManager, ctx: AnalysisContext,
         return result
 
     out_dir = os.path.join(ctx.work_dir, "05_longest_isoform")
-    os.makedirs(out_dir, exist_ok=True)
-
     output_fa = os.path.join(out_dir, f"{ctx.species_prefix}_trinity_longest.fasta")
+
+    # 续跑模式：检查输出文件是否已存在
+    if ctx.resume_mode and os.path.isfile(output_fa):
+        ctx.longest_isoform_fasta = output_fa
+        result.status = StepStatus.SKIPPED
+        result.message = f"输出已存在，续跑模式跳过: {output_fa}"
+        log(f"  ⚡ 跳过（输出已存在）: {output_fa}")
+        return result
+
+    os.makedirs(out_dir, exist_ok=True)
     ctx.longest_isoform_fasta = output_fa
 
     # 查找 get_longest_isoform_seq_per_trinity_gene.pl
@@ -393,7 +494,6 @@ def step_cd_hit(env: CondaEnvManager, ctx: AnalysisContext,
         return result
 
     out_dir = os.path.join(ctx.work_dir, "06_cd_hit_out")
-    os.makedirs(out_dir, exist_ok=True)
     ctx.cd_hit_dir = out_dir
 
     # 根据 identity 确定 word_size
@@ -414,6 +514,16 @@ def step_cd_hit(env: CondaEnvManager, ctx: AnalysisContext,
 
     id_str = str(int(identity * 100))
     output_fa = os.path.join(out_dir, f"{ctx.species_prefix}_trinity_longest_rd{id_str}.fasta")
+
+    # 续跑模式：检查输出文件是否已存在（文件名包含 identity 阈值）
+    if ctx.resume_mode and os.path.isfile(output_fa):
+        ctx.cd_hit_output = output_fa
+        result.status = StepStatus.SKIPPED
+        result.message = f"输出已存在，续跑模式跳过: {output_fa}"
+        log(f"  ⚡ 跳过（输出已存在）: {output_fa}")
+        return result
+
+    os.makedirs(out_dir, exist_ok=True)
     ctx.cd_hit_output = output_fa
 
     result.status = StepStatus.RUNNING
@@ -449,17 +559,26 @@ def step_rename_sequences(env: CondaEnvManager, ctx: AnalysisContext,
     result = StepResult("rename", "重命名序列")
 
     input_fa = ctx.cd_hit_output
+    # 若 cd_hit 被跳过且其输出不存在，则本步骤也无法运行
     if not input_fa or not os.path.isfile(input_fa):
         result.status = StepStatus.SKIPPED
         result.message = "CD-HIT 输出文件不存在，请先运行 CD-HIT"
         return result
 
     out_dir = os.path.join(ctx.work_dir, "07_renamed")
-    os.makedirs(out_dir, exist_ok=True)
-
     # 重命名后的文件
     renamed_fa = os.path.join(out_dir, f"{ctx.species_prefix}_trinity_reprn.fasta")
     final_fa = os.path.join(out_dir, f"{ctx.species_prefix}_trinity_repug.fasta")
+
+    # 续跑模式：检查输出文件是否已存在
+    if ctx.resume_mode and os.path.isfile(final_fa):
+        ctx.renamed_fasta = final_fa
+        result.status = StepStatus.SKIPPED
+        result.message = f"输出已存在，续跑模式跳过: {final_fa}"
+        log(f"  ⚡ 跳过（输出已存在）: {final_fa}")
+        return result
+
+    os.makedirs(out_dir, exist_ok=True)
     ctx.renamed_fasta = final_fa
 
     result.status = StepStatus.RUNNING
@@ -519,6 +638,16 @@ def step_transdecoder_longorfs(env: CondaEnvManager, ctx: AnalysisContext,
         return result
 
     out_dir = os.path.join(ctx.work_dir, "08_transdecoder_orf")
+    expected_pep = os.path.join(out_dir, "longest_orfs.pep")
+
+    # 续跑模式：检查输出文件是否已存在
+    if ctx.resume_mode and os.path.isfile(expected_pep):
+        ctx.transdecoder_orf_dir = out_dir
+        result.status = StepStatus.SKIPPED
+        result.message = f"输出已存在，续跑模式跳过: {expected_pep}"
+        log(f"  ⚡ 跳过（输出已存在）: {expected_pep}")
+        return result
+
     os.makedirs(out_dir, exist_ok=True)
     ctx.transdecoder_orf_dir = out_dir
 
@@ -560,6 +689,20 @@ def step_transdecoder_predict(env: CondaEnvManager, ctx: AnalysisContext,
     # Predict 使用与 LongOrfs 相同的 output_dir (包含 LongOrfs 结果)
     prev_out = ctx.transdecoder_orf_dir or os.path.join(ctx.work_dir, "08_transdecoder_orf")
     predict_dir = os.path.join(ctx.work_dir, "09_transdecoder_predict")
+    base = os.path.splitext(os.path.basename(input_fa))[0]
+    expected_pep = os.path.join(predict_dir, f"{base}.fasta.transdecoder.pep")
+
+    # 续跑模式：检查输出文件是否已存在
+    if ctx.resume_mode and os.path.isfile(expected_pep):
+        ctx.transdecoder_predict_dir = predict_dir
+        ctx.transdecoder_pep = expected_pep
+        ctx.transdecoder_cds = os.path.join(predict_dir, f"{base}.fasta.transdecoder.cds")
+        ctx.transdecoder_gff3 = os.path.join(predict_dir, f"{base}.fasta.transdecoder.gff3")
+        result.status = StepStatus.SKIPPED
+        result.message = f"输出已存在，续跑模式跳过: {expected_pep}"
+        log(f"  ⚡ 跳过（输出已存在）: {expected_pep}")
+        return result
+
     os.makedirs(predict_dir, exist_ok=True)
     ctx.transdecoder_predict_dir = predict_dir
 
@@ -607,6 +750,15 @@ def step_rename_gff3(env: CondaEnvManager, ctx: AnalysisContext,
 
     out_dir = os.path.join(ctx.work_dir, "09_transdecoder_predict")
     output_gff3 = os.path.join(out_dir, f"{ctx.species_prefix}_trinity_repug_td.gff3")
+
+    # 续跑模式：检查输出文件是否已存在
+    if ctx.resume_mode and os.path.isfile(output_gff3):
+        ctx.renamed_gff3 = output_gff3
+        result.status = StepStatus.SKIPPED
+        result.message = f"输出已存在，续跑模式跳过: {output_gff3}"
+        log(f"  ⚡ 跳过（输出已存在）: {output_gff3}")
+        return result
+
     ctx.renamed_gff3 = output_gff3
 
     result.status = StepStatus.RUNNING
@@ -657,11 +809,21 @@ def step_gffread(env: CondaEnvManager, ctx: AnalysisContext,
         return result
 
     out_dir = os.path.join(ctx.work_dir, "10_gffread_out")
-    os.makedirs(out_dir, exist_ok=True)
-    ctx.gffread_dir = out_dir
-
     cds_out = os.path.join(out_dir, f"{ctx.species_prefix}_trinity_repug_cds.fasta")
     pep_out = os.path.join(out_dir, f"{ctx.species_prefix}_trinity_repug_pep.fasta")
+
+    # 续跑模式：检查 cds 和 pep 输出文件是否均已存在
+    if ctx.resume_mode and os.path.isfile(cds_out) and os.path.isfile(pep_out):
+        ctx.gffread_dir = out_dir
+        ctx.final_cds = cds_out
+        ctx.final_pep = pep_out
+        result.status = StepStatus.SKIPPED
+        result.message = f"输出已存在，续跑模式跳过: {cds_out}, {pep_out}"
+        log(f"  ⚡ 跳过（输出已存在）: {cds_out}, {pep_out}")
+        return result
+
+    os.makedirs(out_dir, exist_ok=True)
+    ctx.gffread_dir = out_dir
     ctx.final_cds = cds_out
     ctx.final_pep = pep_out
 
@@ -671,6 +833,13 @@ def step_gffread(env: CondaEnvManager, ctx: AnalysisContext,
     # 提取 CDS
     cmd_cds = f"gffread {gff3} -g {genome_fa} -x {cds_out}"
     ok, output = env.run_in_env(cmd_cds, cwd=ctx.work_dir, timeout=3600)
+
+    # 取消检查
+    if env.is_cancelled:
+        result.status = StepStatus.FAILED
+        result.message = "用户取消"
+        return result
+
     if ok:
         log(f"✓ CDS 提取完成 → {cds_out}")
     else:
@@ -679,6 +848,13 @@ def step_gffread(env: CondaEnvManager, ctx: AnalysisContext,
     # 提取 Protein
     cmd_pep = f"gffread {gff3} -g {genome_fa} -y {pep_out}"
     ok, output = env.run_in_env(cmd_pep, cwd=ctx.work_dir, timeout=3600)
+
+    # 取消检查
+    if env.is_cancelled:
+        result.status = StepStatus.FAILED
+        result.message = "用户取消"
+        return result
+
     if ok:
         log(f"✓ Protein 提取完成 → {pep_out}")
     else:
@@ -702,21 +878,21 @@ PIPELINE_STEPS: List[dict] = [
         "name": "FastQC 质量评估",
         "description": "对原始测序数据进行质量评估",
         "function": step_fastqc,
-        "required": True,
+        "required": False,
     },
     {
         "id": "fastp",
         "name": "Fastp 数据过滤",
         "description": "过滤低质量 reads，去除接头序列",
         "function": step_fastp,
-        "required": True,
+        "required": False,
     },
     {
         "id": "rcorrector",
         "name": "Rcorrector 纠错",
         "description": "对 RNA-seq reads 进行错误纠正",
         "function": step_rcorrector,
-        "required": True,
+        "required": False,
     },
     {
         "id": "trinity",
@@ -744,34 +920,34 @@ PIPELINE_STEPS: List[dict] = [
         "name": "重命名序列",
         "description": "将序列重命名为规范格式并转换换行符",
         "function": step_rename_sequences,
-        "required": True,
+        "required": False,
     },
     {
         "id": "transdecoder_longorfs",
         "name": "TransDecoder LongOrfs",
         "description": "识别长的开放阅读框 (ORF)",
         "function": step_transdecoder_longorfs,
-        "required": True,
+        "required": False,
     },
     {
         "id": "transdecoder_predict",
         "name": "TransDecoder Predict",
         "description": "最终预测编码序列 (CDS)",
         "function": step_transdecoder_predict,
-        "required": True,
+        "required": False,
     },
     {
         "id": "rename_gff3",
         "name": "重命名 GFF3",
         "description": "统一 GFF3 注释文件中的基因命名",
         "function": step_rename_gff3,
-        "required": True,
+        "required": False,
     },
     {
         "id": "gffread",
         "name": "Gffread 提取序列",
         "description": "从 GFF3 + 基因组提取最终的 CDS/Protein",
         "function": step_gffread,
-        "required": True,
+        "required": False,
     },
 ]

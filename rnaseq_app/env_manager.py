@@ -14,6 +14,7 @@ import subprocess
 import shutil
 import urllib.request
 import stat
+import threading
 from typing import Tuple, List, Optional
 from dataclasses import dataclass, field
 
@@ -165,21 +166,79 @@ class CondaEnvManager:
     def __init__(self, env_name: str, conda_path: str = ""):
         self.env_name = env_name
         self._conda_exe = self._resolve_conda(conda_path)
+        # ---- 进程管理与取消支持 ----
+        self._current_proc: Optional[subprocess.Popen] = None
+        self._proc_lock = threading.Lock()
+        self._cancelled = False
+
+    @property
+    def is_cancelled(self) -> bool:
+        """是否已请求取消（供步骤函数循环中检查）"""
+        return self._cancelled
+
+    def reset_cancel(self):
+        """重置取消标志（新一轮运行前调用）"""
+        self._cancelled = False
+
+    def cancel_current_command(self):
+        """取消当前正在运行的命令：终止子进程树"""
+        self._cancelled = True
+        with self._proc_lock:
+            proc = self._current_proc
+        if proc and proc.poll() is None:
+            # 先 SIGTERM，再 SIGKILL，确保子进程树退出
+            try:
+                # 杀整个进程组（conda run 启动的孙进程也要清理）
+                try:
+                    os.killpg(os.getpgid(proc.pid), 15)  # SIGTERM
+                except Exception:
+                    proc.terminate()
+                # 等待 2 秒
+                try:
+                    proc.wait(timeout=2)
+                except Exception:
+                    try:
+                        os.killpg(os.getpgid(proc.pid), 9)  # SIGKILL
+                    except Exception:
+                        proc.kill()
+            except Exception:
+                pass
 
     # ---- 统一命令执行 ----
 
     def _exec(self, cmd: List[str], timeout: int, cwd: str = "") -> Tuple[int, str, str]:
-        """执行 conda 命令，返回 (returncode, stdout, stderr)"""
+        """执行 conda 命令，返回 (returncode, stdout, stderr)。
+
+        使用 Popen 启动进程，保存句柄以支持 cancel_current_command() 中断。
+        每次执行前重置取消标志。
+        """
+        self._cancelled = False
         try:
-            result = subprocess.run(
-                cmd, capture_output=True, text=True,
-                timeout=timeout, cwd=cwd or None, env=_conda_env(),
+            # 启动新进程组，便于整组终止
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                cwd=cwd or None,
+                env=_conda_env(),
+                # Linux: 子进程自成进程组，可 killpg 整组清理
+                start_new_session=True,
             )
-            return result.returncode, result.stdout, result.stderr
-        except subprocess.TimeoutExpired:
-            return -1, "", f"命令超时（>{timeout}秒）"
+            with self._proc_lock:
+                self._current_proc = proc
+            try:
+                out, err = proc.communicate(timeout=timeout)
+                return proc.returncode, out or "", err or ""
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+                return -1, "", f"命令超时（>{timeout}秒）"
         except Exception as e:
             return -1, "", str(e)
+        finally:
+            with self._proc_lock:
+                self._current_proc = None
 
     # ---- Conda 解析（自包含优先） ----
 
@@ -554,6 +613,9 @@ class CondaEnvManager:
     def run_in_env(self, command: str, cwd: str = "", timeout: int = 3600) -> Tuple[bool, str]:
         full_cmd = [self._conda_exe, "run", "-n", self.env_name, "bash", "-c", command]
         rc, out, err = self._exec(full_cmd, timeout, cwd=cwd)
+        # 被用户取消时给出明确提示
+        if self._cancelled:
+            return False, "用户已取消"
         output = out
         if err:
             output += "\n" + err

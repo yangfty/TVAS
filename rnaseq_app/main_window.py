@@ -2,21 +2,28 @@
 转录组分析软件 - 主界面
 
 三大分析模块:
-  [1. De Novo 组装]  [2. 序列比对]  [3. 差异表达分析]
+  [一、de novo 组装]  [二、序列比对]  [三、差异表达分析]
         ┃                    ┃                 ┃
         ┃                (开发中占位)     (开发中占位)
         ▼
-┌──────────┬─────────────────────┬──────────┐
-│          │                     │          │
-│  步骤    │     主内容区         │  参数    │
-│  导航    │   (QStackedWidget)   │  面板    │
-│  列表    │                     │          │
-│          │                     │          │
-├──────────┴─────────────────────┴──────────┤
-│              日志输出面板                    │
-├───────────────────────────────────────────┤
-│  [上一步] [运行选中] [运行全部] [停止]       │
-└───────────────────────────────────────────┘
+┌─────────────────────────────────────────────┐
+│  面包屑: 📍 一、de novo 组装 › 4. 任务运行    │
+├─────────────────────────────────────────────┤
+│  [1.环境设置] [2.样本配置] [3.参数配置] [4.任务运行] │
+│                                             │
+│  4.任务运行页:                               │
+│  ┌─ 执行步骤选择 ──────────────────────────┐ │
+│  │ ☑ 1.FastQC  (可选)        ◉ 运行中      │ │
+│  │ ☑ 2.Fastp   (可选)        ○ 待运行      │ │
+│  │ ☑ 3.Rcorrector (可选)     ○ 待运行      │ │
+│  │ ☑ 4.Trinity ★必需         ○ 待运行      │ │
+│  │ ...                                    │ │
+│  └────────────────────────────────────────┘ │
+│  ┌─ 运行日志 ──────────────────────────────┐ │
+│  │ (实时输出)                              │ │
+│  └────────────────────────────────────────┘ │
+│  [进度条████████░░░░] [从头运行] [续跑] [停止]│
+└─────────────────────────────────────────────┘
 """
 
 import os
@@ -1349,7 +1356,7 @@ class ParamConfigPage(QWidget):
         "threads": 4,
         "fastp_quality": 20,
         "fastp_min_length": 50,
-        "trinity_max_memory": "50G",
+        "trinity_max_memory_num": 50,   # 数值部分（G 单位固定显示在控件后方）
         "cd_hit_identity": 0.80,
     }
 
@@ -1460,12 +1467,29 @@ class ParamConfigPage(QWidget):
         g3.setSpacing(12)
         g3.setContentsMargins(16, 22, 16, 16)
 
-        self.tr_mem_edit = QLineEdit()
-        self.tr_mem_edit.setText(self.config.trinity_params().get("max_memory", "50G"))
-        self.tr_mem_edit.setToolTip("Trinity组装可用的最大内存（--max_memory）。格式如 50G、100G，建议设为物理内存的80%")
-        tr_field = self._line_row(self.tr_mem_edit, f"默认 {self._DEFAULTS['trinity_max_memory']}")
-        g3.addRow("最大内存 (--max_memory):", tr_field)
-        tr_hint = QLabel("格式: 数字+单位（如 50G / 100G），建议设为物理内存的 80%")
+        self.tr_mem_spin = _NoWheelSpinBox()
+        self.tr_mem_spin.setRange(1, 999)
+        # 从配置中解析数值（如 "50G" → 50）
+        mem_str = self.config.trinity_params().get("max_memory", "50G")
+        try:
+            mem_num = int("".join(c for c in str(mem_str) if c.isdigit()))
+        except Exception:
+            mem_num = 50
+        self.tr_mem_spin.setValue(mem_num)
+        self.tr_mem_spin.setToolTip("Trinity组装可用的最大内存（--max_memory），单位固定为 G。建议设为物理内存的80%")
+        # SpinBox + 固定 G 后缀
+        mem_field = QHBoxLayout()
+        mem_field.setSpacing(4)
+        mem_field.addWidget(self.tr_mem_spin)
+        mem_unit = QLabel("G")
+        mem_unit.setStyleSheet("color: #2c3e50; font-size: 13px; font-weight: bold;")
+        mem_field.addWidget(mem_unit)
+        mem_hint = QLabel(f"默认 {self._DEFAULTS['trinity_max_memory_num']}G")
+        mem_hint.setStyleSheet("color: #95a5a6; font-size: 12px;")
+        mem_field.addWidget(mem_hint)
+        mem_field.addStretch()
+        g3.addRow("最大内存 (--max_memory):", mem_field)
+        tr_hint = QLabel("建议设为物理内存的 80%（如 64G 内存填 50）")
         tr_hint.setStyleSheet("color: #7f8c8d; font-size: 12px;")
         tr_hint.setWordWrap(True)
         g3.addRow("", tr_hint)
@@ -1530,7 +1554,7 @@ class ParamConfigPage(QWidget):
         self.thread_spin.setValue(d["threads"])
         self.fp_q_spin.setValue(d["fastp_quality"])
         self.fp_l_spin.setValue(d["fastp_min_length"])
-        self.tr_mem_edit.setText(d["trinity_max_memory"])
+        self.tr_mem_spin.setValue(d["trinity_max_memory_num"])
         self.ch_identity_spin.setValue(d["cd_hit_identity"])
         self._log_parent("已恢复默认参数")
 
@@ -1561,7 +1585,7 @@ class ParamConfigPage(QWidget):
         return {
             "fastp_quality": self.fp_q_spin.value(),
             "fastp_min_length": self.fp_l_spin.value(),
-            "trinity_max_memory": self.tr_mem_edit.text().strip() or "50G",
+            "trinity_max_memory": f"{self.tr_mem_spin.value()}G",
             "cd_hit_identity": self.ch_identity_spin.value(),
         }
 
@@ -1627,15 +1651,7 @@ class MainWindow(QMainWindow):
         """)
         denovo_layout.addWidget(self.breadcrumb_label)
 
-        # 顶部水平区域
-        top_splitter = QSplitter(Qt.Horizontal)
-
-        # 左侧：步骤导航
-        self.step_list = StepListWidget()
-        self.step_list.populate(PIPELINE_STEPS)
-        top_splitter.addWidget(self.step_list)
-
-        # 右侧：Tab 页面
+        # Tab 页面（移除左侧步骤导航栏，步骤选择整合到「4. 任务运行」页）
         self.tab_widget = QTabWidget()
         self.tab_widget.setStyleSheet(f"""
             QTabWidget::pane {{
@@ -1666,25 +1682,52 @@ class MainWindow(QMainWindow):
         run_layout.setContentsMargins(12, 12, 12, 12)
         run_layout.setSpacing(10)
 
-        # 执行步骤选择
+        # ---- 步骤选择与状态显示（整合：运行前为复选框，运行后显示状态） ----
         step_group = QGroupBox("执行步骤选择")
         step_group.setStyleSheet(group_style())
         sg_layout = QVBoxLayout(step_group)
-        sg_layout.setSpacing(6)
+        sg_layout.setSpacing(4)
         sg_layout.setContentsMargins(16, 22, 16, 16)
-        step_hint = QLabel("de novo 组装流程的 11 个步骤均为必需，暂不支持跳过。")
+
+        step_hint = QLabel(
+            "勾选需要运行的步骤（标 ★ 为必需步骤，不可取消）。\n"
+            "运行开始后，此区域将实时显示每步的执行状态。"
+        )
         step_hint.setStyleSheet("color: #7f8c8d; font-size: 12px; margin-bottom: 4px;")
+        step_hint.setWordWrap(True)
         sg_layout.addWidget(step_hint)
+
         self.step_checkboxes = {}
-        for step in PIPELINE_STEPS:
-            cb = QCheckBox(f"{step['name']} - {step['description']}")
+        self.step_status_labels = {}
+        for i, step in enumerate(PIPELINE_STEPS):
+            row = QHBoxLayout()
+            row.setSpacing(8)
+            # 复选框
+            required = step.get("required", True)
+            label_text = f"{i+1}. {step['name']}"
+            if not required:
+                label_text += "  (可选)"
+            cb = QCheckBox(label_text)
             cb.setChecked(True)
-            cb.setEnabled(False)  # de novo 流程所有步骤都是必需的
+            if required:
+                cb.setEnabled(False)  # 必需步骤不可取消勾选
+                cb.setToolTip(f"必需步骤，不可跳过。{step['description']}")
+            else:
+                cb.setToolTip(f"可选步骤，可跳过。{step['description']}")
             self.step_checkboxes[step["id"]] = cb
-            sg_layout.addWidget(cb)
+            row.addWidget(cb)
+            # 状态标签（运行时显示 ○/◉/✓/✗/−）
+            status_lbl = QLabel("")
+            status_lbl.setFixedWidth(30)
+            status_lbl.setAlignment(Qt.AlignCenter)
+            status_lbl.setStyleSheet("font-size: 14px; font-weight: bold;")
+            self.step_status_labels[step["id"]] = status_lbl
+            row.addWidget(status_lbl)
+            row.addStretch()
+            sg_layout.addLayout(row)
         run_layout.addWidget(step_group)
 
-        # 运行日志
+        # ---- 运行日志 ----
         log_group = QGroupBox("运行日志")
         log_group.setStyleSheet(group_style())
         log_layout = QVBoxLayout(log_group)
@@ -1717,7 +1760,7 @@ class MainWindow(QMainWindow):
         log_layout.addWidget(self.log_view)
         run_layout.addWidget(log_group, 1)
 
-        # 进度条与运行按钮
+        # ---- 进度条与运行按钮 ----
         control_layout = QHBoxLayout()
         control_layout.setContentsMargins(0, 0, 0, 0)
         self.progress_bar = QProgressBar()
@@ -1738,10 +1781,17 @@ class MainWindow(QMainWindow):
         """)
         control_layout.addWidget(self.progress_bar, 1)
 
-        self.run_all_btn = QPushButton("▶ 运行全部流程")
-        self.run_all_btn.clicked.connect(self._on_run_all)
+        self.run_all_btn = QPushButton("▶ 从头运行")
+        self.run_all_btn.clicked.connect(lambda: self._on_run_all(resume=False))
         self.run_all_btn.setStyleSheet(self._btn_style(COLORS["primary_btn"]))
+        self.run_all_btn.setToolTip("从头运行所有勾选的步骤（已有输出会被覆盖）")
         control_layout.addWidget(self.run_all_btn)
+
+        self.resume_btn = QPushButton("⚡ 续跑")
+        self.resume_btn.clicked.connect(lambda: self._on_run_all(resume=True))
+        self.resume_btn.setStyleSheet(self._btn_style("#27ae60", "#229954"))
+        self.resume_btn.setToolTip("续跑模式：自动跳过输出已存在的步骤，从上次中断处继续")
+        control_layout.addWidget(self.resume_btn)
 
         self.stop_btn = QPushButton("■ 停止")
         self.stop_btn.clicked.connect(self._on_stop)
@@ -1755,11 +1805,7 @@ class MainWindow(QMainWindow):
         # Tab 切换时更新面包屑
         self.tab_widget.currentChanged.connect(self._update_breadcrumb)
 
-        top_splitter.addWidget(self.tab_widget)
-        top_splitter.setStretchFactor(0, 0)
-        top_splitter.setStretchFactor(1, 1)
-
-        denovo_layout.addWidget(top_splitter, 1)
+        denovo_layout.addWidget(self.tab_widget, 1)
 
         self.module_stack.addWidget(denovo_widget)
 
@@ -1868,8 +1914,12 @@ class MainWindow(QMainWindow):
 
     # ---- 运行流程 ----
 
-    def _on_run_all(self):
-        """运行全部流程"""
+    def _on_run_all(self, resume: bool = False):
+        """运行全部流程
+
+        Args:
+            resume: True=续跑模式（跳过输出已存在的步骤），False=从头运行
+        """
         # 验证配置
         work_dir = self.param_page.get_work_dir()
         if not work_dir:
@@ -1911,22 +1961,33 @@ class MainWindow(QMainWindow):
         extra_params = self.param_page.get_extra_params()
         active_steps = [sid for sid, cb in self.step_checkboxes.items() if cb.isChecked()]
 
-        # 开始运行
-        self._log("\n" + "=" * 60)
-        self._log("  开始执行转录组 de novo 组装流程")
-        self._log(f"  工作目录: {work_dir}")
-        self._log(f"  样本数量: {len(samples)}")
-        self._log(f"  物种前缀: {ctx.species_prefix}")
-        self._log("=" * 60)
+        # 续跑模式提示
+        if resume:
+            self._log("\n" + "=" * 60)
+            self._log("  ⚡ 续跑模式：将自动跳过输出已存在的步骤")
+            self._log(f"  工作目录: {work_dir}")
+            self._log("  每步输出保存在独立子文件夹（01_fastqc_out, 02_fastp_clean 等）")
+            self._log("  已完成的步骤会保留结果，从中断处继续")
+            self._log("=" * 60)
+        else:
+            self._log("\n" + "=" * 60)
+            self._log("  开始执行转录组 de novo 组装流程（从头运行）")
+            self._log(f"  工作目录: {work_dir}")
+            self._log(f"  样本数量: {len(samples)}")
+            self._log(f"  物种前缀: {ctx.species_prefix}")
+            self._log(f"  执行步骤: {len(active_steps)} 个")
+            self._log("  每步输出保存在独立子文件夹，便于管理和断点续跑")
+            self._log("=" * 60)
 
         self._set_running_state(True)
-        self.step_list.reset_all()
+        self._reset_step_statuses()
         self.progress_bar.setValue(0)
         # 切换到「4. 任务运行」页，方便查看实时日志
         self.tab_widget.setCurrentIndex(3)
 
         # 启动后台线程
-        self.worker = AnalysisWorker(env, ctx, extra_params, active_steps)
+        self.worker = AnalysisWorker(env, ctx, extra_params, active_steps,
+                                     resume_mode=resume)
         self.worker.log_message.connect(self._on_log)
         self.worker.progress_updated.connect(self._on_progress)
         self.worker.step_changed.connect(self._on_step_change)
@@ -1934,25 +1995,41 @@ class MainWindow(QMainWindow):
         self.worker.start()
 
     def _on_stop(self):
+        """停止当前运行的分析流程"""
         if self.worker and self.worker.isRunning():
             reply = QMessageBox.question(
                 self, "确认停止",
-                "确定要停止当前运行的分析流程吗？\n已完成的步骤结果保留。",
+                "确定要停止当前运行的分析流程吗？\n\n"
+                "• 已完成的步骤结果保留在各自子文件夹中\n"
+                "• 停止后可点击「⚡ 续跑」从中断处继续\n"
+                "• 每步输出保存在独立子文件夹（01_fastqc_out 等），不会丢失",
                 QMessageBox.Yes | QMessageBox.No
             )
             if reply == QMessageBox.Yes:
                 self.worker.cancel()
-                self._log("\n⚠ 用户请求停止流程...")
+                self._log("\n⚠ 用户请求停止流程，正在终止当前命令...")
                 self.statusBar().showMessage("正在停止...")
 
     def _set_running_state(self, running: bool):
+        """设置运行/停止状态下的控件可用性"""
         self.run_all_btn.setEnabled(not running)
+        self.resume_btn.setEnabled(not running)
         self.stop_btn.setEnabled(running)
-        # 运行时禁用各配置页，但保留「4. 任务运行」页可操作（查看日志、停止）
+        # 运行时禁用各配置页和步骤复选框，但保留「4. 任务运行」页可操作（查看日志、停止）
         for page in (self.env_page, self.sample_page, self.param_page):
             page.setEnabled(not running)
+        for cb in self.step_checkboxes.values():
+            # 必需步骤本来就 disabled，可选步骤运行时也禁用
+            if cb.isEnabled():
+                cb.setEnabled(not running)
         if running:
             self.statusBar().showMessage("● 分析运行中...")
+
+    def _reset_step_statuses(self):
+        """重置所有步骤状态标签为空"""
+        for lbl in self.step_status_labels.values():
+            lbl.setText("")
+            lbl.setStyleSheet("font-size: 14px; font-weight: bold;")
 
     @pyqtSlot(str)
     def _on_log(self, msg: str):
@@ -1964,12 +2041,29 @@ class MainWindow(QMainWindow):
 
     @pyqtSlot(str, str)
     def _on_step_change(self, step_id: str, status: str):
-        self.step_list.set_step_status(step_id, status)
+        """更新步骤状态标签（整合在执行步骤选择区域）"""
+        icons = {
+            StepStatus.PENDING.value: ("○", COLORS["pending"]),
+            StepStatus.RUNNING.value: ("◉", COLORS["running"]),
+            StepStatus.SUCCESS.value: ("✓", COLORS["success"]),
+            StepStatus.FAILED.value: ("✗", COLORS["error"]),
+            StepStatus.SKIPPED.value: ("−", COLORS["skipped"]),
+        }
+        if step_id in self.step_status_labels:
+            icon, color = icons.get(status, ("○", COLORS["pending"]))
+            lbl = self.step_status_labels[step_id]
+            lbl.setText(icon)
+            lbl.setStyleSheet(f"font-size: 16px; font-weight: bold; color: {color};")
 
     def _on_finished(self):
         self._set_running_state(False)
         self.statusBar().showMessage("✓ 分析完成")
         self._log("\n✓ 流程执行完毕。")
+        # 恢复可选步骤复选框为可用
+        for step_id, cb in self.step_checkboxes.items():
+            step = next((s for s in PIPELINE_STEPS if s["id"] == step_id), None)
+            if step and not step.get("required", True):
+                cb.setEnabled(True)
         QMessageBox.information(self, "分析完成", "转录组 de novo 组装流程执行完毕！")
 
     # ---- 配置持久化 ----
