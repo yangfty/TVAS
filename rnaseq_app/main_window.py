@@ -1682,7 +1682,7 @@ class MainWindow(QMainWindow):
                 qproperty-drawBase: 0;
             }}
             QTabBar::tab {{
-                padding: 10px 28px;
+                padding: 10px 22px;
                 margin-right: 3px;
                 font-size: 13px;
                 border: 1px solid {COLORS['border']};
@@ -1691,7 +1691,7 @@ class MainWindow(QMainWindow):
                 border-top-right-radius: 6px;
                 background: {COLORS['bg']};
                 color: #7f8c8d;
-                min-width: 110px;
+                min-width: 140px;
             }}
             QTabBar::tab:selected {{
                 border-bottom: 3px solid {COLORS['primary_btn']};
@@ -1723,24 +1723,23 @@ class MainWindow(QMainWindow):
         step_group = QGroupBox("执行步骤选择")
         step_group.setStyleSheet(group_style())
         # 步骤选择区固定高度，不挤压日志区
-        step_group.setMaximumHeight(360)
+        step_group.setMaximumHeight(420)
         sg_layout = QVBoxLayout(step_group)
-        sg_layout.setSpacing(6)
+        sg_layout.setSpacing(8)
         sg_layout.setContentsMargins(16, 22, 16, 14)
 
         step_hint = QLabel(
-            "  ★ 必需步骤（不可取消）　　○ 可选步骤（可勾选/取消）\n"
-            "  运行时每步右侧显示实时状态：等待中 / 运行中… / 已完成 / 失败 / 已跳过"
+            "★ 必需步骤（不可取消）　　○ 可选步骤（可勾选/取消）"
         )
-        step_hint.setStyleSheet("color: #7f8c8d; font-size: 12px; margin-bottom: 4px; line-height: 1.6;")
+        step_hint.setStyleSheet("color: #7f8c8d; font-size: 12px; margin-bottom: 2px;")
         step_hint.setWordWrap(True)
         sg_layout.addWidget(step_hint)
 
         self.step_checkboxes = {}
         self.step_status_labels = {}
         step_grid = QGridLayout()
-        step_grid.setHorizontalSpacing(10)
-        step_grid.setVerticalSpacing(3)
+        step_grid.setHorizontalSpacing(12)
+        step_grid.setVerticalSpacing(4)
 
         for i, step in enumerate(PIPELINE_STEPS):
             required = step.get("required", True)
@@ -1749,7 +1748,7 @@ class MainWindow(QMainWindow):
 
             # 标记列（★ 或 ○，固定宽度对齐）
             marker_lbl = QLabel(marker)
-            marker_lbl.setFixedWidth(16)
+            marker_lbl.setFixedWidth(18)
             marker_lbl.setAlignment(Qt.AlignCenter)
             if required:
                 marker_lbl.setStyleSheet(f"color: {COLORS['primary_btn']}; font-size: 14px; font-weight: bold;")
@@ -1763,16 +1762,16 @@ class MainWindow(QMainWindow):
             if required:
                 cb.setEnabled(False)
                 cb.setStyleSheet(f"QCheckBox {{ color: #2c3e50; font-weight: bold; font-size: 13px; }}")
-                cb.setToolTip(f"★ 必需步骤，不可跳过。{step['description']}")
+                cb.setToolTip(f"★ 必需步骤，不可跳过\n{step['description']}")
             else:
                 cb.setStyleSheet("QCheckBox { color: #555; font-size: 13px; }")
-                cb.setToolTip(f"○ 可选步骤，可跳过。{step['description']}")
+                cb.setToolTip(f"○ 可选步骤，可跳过\n{step['description']}")
             self.step_checkboxes[step["id"]] = cb
             step_grid.addWidget(cb, i, 1)
 
             # 状态标签（紧挨步骤名右侧，不放到最右）
             status_lbl = QLabel("")
-            status_lbl.setFixedWidth(75)
+            status_lbl.setFixedWidth(80)
             status_lbl.setAlignment(Qt.AlignCenter)
             status_lbl.setStyleSheet(
                 "QLabel { font-size: 12px; padding: 2px 8px; border-radius: 10px; }"
