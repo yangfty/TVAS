@@ -29,12 +29,11 @@
 import os
 import sys
 import shutil
-import subprocess
 from typing import List, Optional
 
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QSplitter, QPushButton, QLabel, QFrame, QListWidget, QListWidgetItem,
+    QPushButton, QLabel, QFrame, QListWidget, QListWidgetItem,
     QStackedWidget, QProgressBar, QMessageBox, QFileDialog,
     QTabWidget, QLineEdit, QSpinBox, QDoubleSpinBox,
     QTableWidget, QTableWidgetItem, QHeaderView, QCheckBox, QGroupBox,
@@ -139,8 +138,8 @@ def group_style() -> str:
             font-weight: bold;
             border: 1px solid {COLORS['border']};
             border-radius: 8px;
-            margin-top: 12px;
-            padding-top: 20px;
+            margin-top: 10px;
+            padding-top: 10px;
             background-color: {COLORS['card_bg']};
         }}
         QGroupBox::title {{
@@ -149,6 +148,10 @@ def group_style() -> str:
             padding: 0 8px;
         }}
     """
+
+
+# 分析模块名称（带序号），供导航栏、面包屑、状态栏共用
+MODULE_NAMES = ["一、de novo 组装", "二、序列比对", "三、差异表达分析"]
 
 
 # ============================================================
@@ -187,11 +190,11 @@ class ModuleNavBar(QFrame):
 
     module_selected = pyqtSignal(int)
 
-    # 模块定义: (名称, 状态, 说明)
+    # 模块定义: (名称, 状态)
     MODULES = [
-        ("一、de novo 组装", "可用"),
-        ("二、序列比对", "开发中"),
-        ("三、差异表达分析", "开发中"),
+        (MODULE_NAMES[0], "可用"),
+        (MODULE_NAMES[1], "开发中"),
+        (MODULE_NAMES[2], "开发中"),
     ]
 
     def __init__(self, parent=None):
@@ -1726,7 +1729,7 @@ class MainWindow(QMainWindow):
         step_group.setMaximumHeight(420)
         sg_layout = QVBoxLayout(step_group)
         sg_layout.setSpacing(8)
-        sg_layout.setContentsMargins(16, 22, 16, 14)
+        sg_layout.setContentsMargins(16, 6, 16, 10)
 
         step_hint = QLabel(
             "★ 必需步骤（不可取消）　　○ 可选步骤（可勾选/取消）"
@@ -1792,7 +1795,7 @@ class MainWindow(QMainWindow):
         log_group = QGroupBox("运行日志")
         log_group.setStyleSheet(group_style())
         log_layout = QVBoxLayout(log_group)
-        log_layout.setContentsMargins(8, 18, 8, 8)
+        log_layout.setContentsMargins(8, 6, 8, 8)
         log_layout.setSpacing(4)
         log_header = QHBoxLayout()
         log_label = QLabel("实时输出（分析运行中的各环节日志）")
@@ -1803,6 +1806,10 @@ class MainWindow(QMainWindow):
         self.clear_log_btn.clicked.connect(self._clear_log)
         self.clear_log_btn.setFixedSize(60, 24)
         log_header.addWidget(self.clear_log_btn)
+        self.export_log_btn = QPushButton("导出日志")
+        self.export_log_btn.clicked.connect(self._export_log)
+        self.export_log_btn.setFixedSize(80, 24)
+        log_header.addWidget(self.export_log_btn)
         log_layout.addLayout(log_header)
 
         self.log_view = QPlainTextEdit()
@@ -1948,27 +1955,58 @@ class MainWindow(QMainWindow):
     def _clear_log(self):
         self.log_view.clear()
 
+    def _export_log(self):
+        """导出运行日志到 txt 或 md 文件"""
+        log_text = self.log_view.toPlainText()
+        if not log_text.strip():
+            QMessageBox.information(self, "导出日志", "日志为空，无可导出内容。")
+            return
+        from datetime import datetime
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        default_name = f"tvas_log_{timestamp}"
+        path, selected_filter = QFileDialog.getSaveFileName(
+            self, "导出运行日志", default_name,
+            "文本文件 (*.txt);;Markdown 文件 (*.md)"
+        )
+        if not path:
+            return
+        # 根据用户选择的过滤器或文件扩展名决定格式
+        is_md = path.lower().endswith(".md") or "Markdown" in (selected_filter or "")
+        try:
+            if is_md:
+                header = (
+                    f"# TVAS 运行日志\n\n"
+                    f"> 导出时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+                    f"```\n{log_text}\n```\n"
+                )
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write(header)
+            else:
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write(log_text)
+            QMessageBox.information(self, "导出成功", f"日志已导出到:\n{path}")
+        except OSError as e:
+            QMessageBox.critical(self, "导出失败", f"写入文件失败:\n{e}")
+
     # ---- 模块切换 ----
 
     def _on_module_changed(self, idx: int):
         """切换分析模块"""
         self.module_stack.setCurrentIndex(idx)
-        module_names = ["de novo 组装", "序列比对", "差异表达分析"]
         if idx == 0:
             self.statusBar().showMessage("就绪 | de novo 组装模块")
         else:
-            self.statusBar().showMessage(
-                f"{module_names[idx]} 模块开发中，将在后续版本开放"
-            )
+            # 去掉序号前缀用于状态栏显示
+            name = MODULE_NAMES[idx].split("、", 1)[-1]
+            self.statusBar().showMessage(f"{name} 模块开发中，将在后续版本开放")
         self._update_breadcrumb(self.tab_widget.currentIndex() if idx == 0 else -1)
 
     def _update_breadcrumb(self, tab_idx: int):
         """更新顶部面包屑，清晰显示当前大步骤（模块）与小步骤（Tab）"""
         module_idx = self.module_stack.currentIndex()
-        module_names = ["一、de novo 组装", "二、序列比对", "三、差异表达分析"]
         if module_idx != 0:
             # 非 de novo 模块：仅显示模块名
-            self.breadcrumb_label.setText(f"📍 {module_names[module_idx]}")
+            self.breadcrumb_label.setText(f"📍 {MODULE_NAMES[module_idx]}")
             return
         tab_labels = [
             "1. 环境设置", "2. 样本配置", "3. 参数配置", "4. 任务运行",

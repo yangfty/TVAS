@@ -1,3 +1,11 @@
+tvas (0.1.6) unstable; urgency=medium
+
+  * 导出日志: 运行日志区新增导出按钮, 支持 TXT 和 Markdown 格式
+  * GroupBox间距优化: 减小标题与内容间距, 日志区显示更多内容
+  * 代码精简: 删除未使用导入, 统一module_names常量
+
+ -- RNA-seq Analysis Tools <dev@example.com>  Thu, 14 Aug 2026 14:00:00 +0800
+
 tvas (0.1.5) unstable; urgency=medium
 
   * 续跑预扫描: 自动检测步骤完成状态, 弹窗确认后续跑
