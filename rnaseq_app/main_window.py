@@ -99,6 +99,21 @@ COLORS = {
     "card_bg": "#ffffff",
 }
 
+# 步骤输出目录映射（用于续跑扫描和清空）
+_STEP_OUTPUT_DIRS = {
+    "fastqc": "01_fastqc_out",
+    "fastp": "02_fastp_clean",
+    "rcorrector": "03_rcorrector",
+    "trinity": "04_trinity_out",
+    "longest_isoform": "05_longest_isoform",
+    "cd_hit": "06_cd_hit_out",
+    "rename": "07_renamed",
+    "transdecoder_longorfs": "08_transdecoder_orf",
+    "transdecoder_predict": "09_transdecoder_predict",
+    "rename_gff3": "09_transdecoder_predict",  # 与上一步同目录
+    "gffread": "10_gffread_out",
+}
+
 
 def _btn_style(bg: str, hover: str, padding: str = "8px 20px") -> str:
     """统一实心按钮样式"""
@@ -1930,6 +1945,42 @@ class MainWindow(QMainWindow):
 
     # ---- 运行流程 ----
 
+    def _scan_step_outputs(self, work_dir: str, active_steps: list):
+        """扫描工作目录中各步骤的输出完成状态
+
+        Returns:
+            (done_steps, todo_steps): 已完成步骤ID列表, 未完成步骤ID列表
+        """
+        done = []
+        todo = []
+        dir_status = {}  # 目录 → 是否已完成（缓存，同目录的步骤共享状态）
+        for sid in active_steps:
+            dir_name = _STEP_OUTPUT_DIRS.get(sid)
+            if not dir_name:
+                continue
+            # 缓存目录检查结果（transdecoder_predict 和 rename_gff3 同目录）
+            if dir_name not in dir_status:
+                full_path = os.path.join(work_dir, dir_name)
+                dir_status[dir_name] = os.path.isdir(full_path) and bool(os.listdir(full_path))
+            if dir_status[dir_name]:
+                done.append(sid)
+            else:
+                todo.append(sid)
+        return done, todo
+
+    def _find_existing_output_dirs(self, work_dir: str):
+        """查找工作目录中已存在的分析输出文件夹"""
+        existing = []
+        if not os.path.isdir(work_dir):
+            return existing
+        # 所有分析输出文件夹以 01_ ~ 10_ 开头
+        all_output_dirs = sorted(set(_STEP_OUTPUT_DIRS.values()))
+        for d in all_output_dirs:
+            full_path = os.path.join(work_dir, d)
+            if os.path.isdir(full_path):
+                existing.append(d)
+        return existing
+
     def _on_run_all(self, resume: bool = False):
         """运行全部流程
 
@@ -1979,15 +2030,73 @@ class MainWindow(QMainWindow):
         extra_params = self.param_page.get_extra_params()
         active_steps = [sid for sid, cb in self.step_checkboxes.items() if cb.isChecked()]
 
-        # 续跑模式提示
+        # ---- 运行前确认 ----
         if resume:
+            # 续跑模式：扫描步骤完成状态，弹窗确认
+            done_steps, todo_steps = self._scan_step_outputs(work_dir, active_steps)
+            if not todo_steps:
+                # 所有步骤都已完成
+                QMessageBox.information(
+                    self, "续跑",
+                    f"所有勾选步骤的输出均已存在，无需续跑。\n\n"
+                    f"已完成步骤: {len(done_steps)} 个\n"
+                    f"如需重跑某步骤，请手动删除对应文件夹后再次点击续跑：\n"
+                    f"  步骤4 → {work_dir}/04_trinity_out\n"
+                    f"  步骤5 → {work_dir}/05_longest_isoform\n"
+                    f"  ..."
+                )
+                return
+            # 显示完成状态报告并确认
+            done_names = [f"✓ 步骤{i+1}. {PIPELINE_STEPS[i]['name']}" for i, s in enumerate(PIPELINE_STEPS) if s["id"] in done_steps]
+            todo_names = [f"▶ 步骤{i+1}. {PIPELINE_STEPS[i]['name']}" for i, s in enumerate(PIPELINE_STEPS) if s["id"] in todo_steps]
+            report = (
+                f"续跑模式 — 步骤完成状态扫描\n\n"
+                f"📁 工作目录: {work_dir}\n\n"
+                f"已完成（将跳过）:\n" + "\n".join(done_names) + "\n\n"
+                f"未完成（将重新运行）:\n" + "\n".join(todo_names) + "\n\n"
+                f"💡 如需重跑已完成的步骤，请手动删除该步骤的文件夹后再点续跑。\n"
+                f"   例如删除 04_trinity_out 文件夹可重跑步骤4（基于步骤3的结果）。\n\n"
+                f"是否开始续跑？"
+            )
+            reply = QMessageBox.question(
+                self, "续跑确认", report,
+                QMessageBox.Yes | QMessageBox.No
+            )
+            if reply != QMessageBox.Yes:
+                return
+
             self._log("\n" + "=" * 60)
             self._log("  ⚡ 续跑模式：将自动跳过输出已存在的步骤")
             self._log(f"  工作目录: {work_dir}")
+            self._log(f"  已完成 {len(done_steps)} 步，将运行 {len(todo_steps)} 步")
             self._log("  每步输出保存在独立子文件夹（01_fastqc_out, 02_fastp_clean 等）")
-            self._log("  已完成的步骤会保留结果，从中断处继续")
+            self._log("  如需重跑某步骤，删除对应文件夹后再次续跑即可")
             self._log("=" * 60)
         else:
+            # 从头运行：确认是否清空工作目录
+            existing_dirs = self._find_existing_output_dirs(work_dir)
+            if existing_dirs:
+                dir_list = "\n".join(f"  📂 {d}" for d in existing_dirs)
+                reply = QMessageBox.question(
+                    self, "从头运行 — 清空确认",
+                    f"从头运行将清除工作目录中已有的分析结果，然后从第一步重新开始。\n\n"
+                    f"📁 工作目录: {work_dir}\n\n"
+                    f"将删除以下文件夹:\n{dir_list}\n\n"
+                    f"⚠ 此操作不可恢复！是否继续？",
+                    QMessageBox.Yes | QMessageBox.No
+                )
+                if reply != QMessageBox.Yes:
+                    return
+                # 清空已有输出文件夹
+                import shutil
+                for d in existing_dirs:
+                    full_path = os.path.join(work_dir, d)
+                    try:
+                        shutil.rmtree(full_path)
+                        self._log(f"  🗑 已删除: {d}")
+                    except Exception as e:
+                        self._log(f"  ⚠ 删除失败: {d} ({e})")
+
             self._log("\n" + "=" * 60)
             self._log("  开始执行转录组 de novo 组装流程（从头运行）")
             self._log(f"  工作目录: {work_dir}")
