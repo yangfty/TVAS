@@ -1,3 +1,12 @@
+tvas (0.1.5) unstable; urgency=medium
+
+  * 样本配置表格自适应窗口大小
+  * 执行步骤选择: 必需步骤加★标记, 说明文字优化
+  * 任务运行状态: 改为文字标签+背景色高亮(等待中/运行中/已完成/失败/已跳过)
+  * 全局布局优化: 窗口尺寸/Tab样式/面包屑/进度条
+
+ -- RNA-seq Analysis Tools <dev@example.com>  Thu, 14 Aug 2026 12:00:00 +0800
+
 tvas (0.1.4) unstable; urgency=medium
 
   * 修复停止功能: 改用Popen+进程组, 点击停止可立即终止当前命令

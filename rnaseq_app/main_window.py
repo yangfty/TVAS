@@ -1183,7 +1183,9 @@ class SampleConfigPage(QWidget):
         self.sample_table.verticalHeader().setVisible(False)
         self.sample_table.setAlternatingRowColors(True)
         self.sample_table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        g_layout.addWidget(self.sample_table)
+        # 表格占据剩余空间，随窗口大小自适应
+        self.sample_table.setMinimumHeight(200)
+        g_layout.addWidget(self.sample_table, 1)
 
         # 操作按钮
         btn_layout = QHBoxLayout()
@@ -1211,7 +1213,6 @@ class SampleConfigPage(QWidget):
         g_layout.addWidget(pair_hint)
 
         layout.addWidget(group)
-        layout.addStretch()
 
     # ---- 文件选择与自动配对 ----
 
@@ -1606,8 +1607,8 @@ class MainWindow(QMainWindow):
 
     def _setup_ui(self):
         self.setWindowTitle(f"转录组分析软件 v{__version__}")
-        self.setMinimumSize(1100, 720)
-        self.resize(1200, 800)
+        self.setMinimumSize(1100, 750)
+        self.resize(1280, 850)
 
         # 设置应用图标
         icon_path = get_app_icon()
@@ -1645,7 +1646,7 @@ class MainWindow(QMainWindow):
                 color: #2c3e50;
                 font-size: 14px;
                 font-weight: bold;
-                padding: 8px 16px;
+                padding: 10px 20px;
                 border-bottom: 1px solid {COLORS['border']};
             }}
         """)
@@ -1657,14 +1658,20 @@ class MainWindow(QMainWindow):
             QTabWidget::pane {{
                 border: 1px solid {COLORS['border']};
                 background: {COLORS['card_bg']};
+                top: -1px;
             }}
             QTabBar::tab {{
-                padding: 8px 20px;
+                padding: 10px 24px;
                 margin-right: 2px;
+                font-size: 13px;
             }}
             QTabBar::tab:selected {{
                 border-bottom: 3px solid {COLORS['primary_btn']};
                 font-weight: bold;
+                color: {COLORS['primary_btn']};
+            }}
+            QTabBar::tab:!selected {{
+                color: #7f8c8d;
             }}
         """)
 
@@ -1685,15 +1692,17 @@ class MainWindow(QMainWindow):
         # ---- 步骤选择与状态显示（整合：运行前为复选框，运行后显示状态） ----
         step_group = QGroupBox("执行步骤选择")
         step_group.setStyleSheet(group_style())
+        # 步骤选择区固定高度，不挤压日志区
+        step_group.setMaximumHeight(320)
         sg_layout = QVBoxLayout(step_group)
-        sg_layout.setSpacing(4)
+        sg_layout.setSpacing(6)
         sg_layout.setContentsMargins(16, 22, 16, 16)
 
         step_hint = QLabel(
-            "勾选需要运行的步骤（标 ★ 为必需步骤，不可取消）。\n"
-            "运行开始后，此区域将实时显示每步的执行状态。"
+            "勾选需要运行的步骤。★ 标记为必需步骤（不可取消），其余为可选步骤。\n"
+            "运行开始后，右侧状态栏将实时显示每步进度。"
         )
-        step_hint.setStyleSheet("color: #7f8c8d; font-size: 12px; margin-bottom: 4px;")
+        step_hint.setStyleSheet("color: #7f8c8d; font-size: 12px; margin-bottom: 6px;")
         step_hint.setWordWrap(True)
         sg_layout.addWidget(step_hint)
 
@@ -1701,29 +1710,33 @@ class MainWindow(QMainWindow):
         self.step_status_labels = {}
         for i, step in enumerate(PIPELINE_STEPS):
             row = QHBoxLayout()
-            row.setSpacing(8)
+            row.setSpacing(10)
             # 复选框
             required = step.get("required", True)
-            label_text = f"{i+1}. {step['name']}"
-            if not required:
-                label_text += "  (可选)"
+            # 必需步骤前加 ★ 标记
+            if required:
+                label_text = f"★ {i+1}. {step['name']}"
+            else:
+                label_text = f"   {i+1}. {step['name']}"
             cb = QCheckBox(label_text)
             cb.setChecked(True)
             if required:
                 cb.setEnabled(False)  # 必需步骤不可取消勾选
-                cb.setToolTip(f"必需步骤，不可跳过。{step['description']}")
+                cb.setToolTip(f"★ 必需步骤，不可跳过。{step['description']}")
             else:
                 cb.setToolTip(f"可选步骤，可跳过。{step['description']}")
             self.step_checkboxes[step["id"]] = cb
             row.addWidget(cb)
-            # 状态标签（运行时显示 ○/◉/✓/✗/−）
+            row.addStretch()
+            # 状态标签（运行时显示「等待中/运行中/已完成/失败/已跳过」）
             status_lbl = QLabel("")
-            status_lbl.setFixedWidth(30)
+            status_lbl.setFixedWidth(80)
             status_lbl.setAlignment(Qt.AlignCenter)
-            status_lbl.setStyleSheet("font-size: 14px; font-weight: bold;")
+            status_lbl.setStyleSheet(
+                "QLabel { font-size: 12px; padding: 2px 8px; border-radius: 10px; }"
+            )
             self.step_status_labels[step["id"]] = status_lbl
             row.addWidget(status_lbl)
-            row.addStretch()
             sg_layout.addLayout(row)
         run_layout.addWidget(step_group)
 
@@ -1772,7 +1785,10 @@ class MainWindow(QMainWindow):
                 border: 1px solid {COLORS['border']};
                 border-radius: 4px;
                 text-align: center;
-                height: 22px;
+                height: 28px;
+                font-size: 13px;
+                font-weight: bold;
+                color: #2c3e50;
             }}
             QProgressBar::chunk {{
                 background-color: {COLORS['primary_btn']};
@@ -2028,10 +2044,12 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("● 分析运行中...")
 
     def _reset_step_statuses(self):
-        """重置所有步骤状态标签为空"""
+        """重置所有步骤状态标签为空（运行前）"""
         for lbl in self.step_status_labels.values():
             lbl.setText("")
-            lbl.setStyleSheet("font-size: 14px; font-weight: bold;")
+            lbl.setStyleSheet(
+                "QLabel { font-size: 12px; padding: 2px 8px; border-radius: 10px; }"
+            )
 
     @pyqtSlot(str)
     def _on_log(self, msg: str):
@@ -2043,19 +2061,30 @@ class MainWindow(QMainWindow):
 
     @pyqtSlot(str, str)
     def _on_step_change(self, step_id: str, status: str):
-        """更新步骤状态标签（整合在执行步骤选择区域）"""
-        icons = {
-            StepStatus.PENDING.value: ("○", COLORS["pending"]),
-            StepStatus.RUNNING.value: ("◉", COLORS["running"]),
-            StepStatus.SUCCESS.value: ("✓", COLORS["success"]),
-            StepStatus.FAILED.value: ("✗", COLORS["error"]),
-            StepStatus.SKIPPED.value: ("−", COLORS["skipped"]),
+        """更新步骤状态标签（文字标签 + 背景色高亮）"""
+        # 状态映射：(显示文字, 文字颜色, 背景色)
+        status_map = {
+            StepStatus.PENDING.value:  ("等待中",  "#7f8c8d", "#ecf0f1"),
+            StepStatus.RUNNING.value:  ("运行中…", "#ffffff", "#3498db"),
+            StepStatus.SUCCESS.value:  ("已完成",  "#ffffff", "#27ae60"),
+            StepStatus.FAILED.value:   ("失败",    "#ffffff", "#e74c3c"),
+            StepStatus.SKIPPED.value:  ("已跳过",  "#7f8c8d", "#bdc3c7"),
         }
         if step_id in self.step_status_labels:
-            icon, color = icons.get(status, ("○", COLORS["pending"]))
+            text, fg, bg = status_map.get(status, ("等待中", "#7f8c8d", "#ecf0f1"))
             lbl = self.step_status_labels[step_id]
-            lbl.setText(icon)
-            lbl.setStyleSheet(f"font-size: 16px; font-weight: bold; color: {color};")
+            lbl.setText(text)
+            # 运行中的步骤加粗显示，其余正常
+            bold = "font-weight: bold;" if status == StepStatus.RUNNING.value else ""
+            lbl.setStyleSheet(
+                f"QLabel {{"
+                f"  font-size: 12px; {bold}"
+                f"  color: {fg};"
+                f"  background-color: {bg};"
+                f"  padding: 3px 10px;"
+                f"  border-radius: 10px;"
+                f"}}"
+            )
 
     def _on_finished(self):
         self._set_running_state(False)
