@@ -1933,12 +1933,14 @@ class MainWindow(QMainWindow):
             self.tab_widget.setCurrentIndex(1)
             return
 
-        # 验证环境
+        # 验证环境（仅警告，不强制阻断）
         env = self.env_page.get_env_manager()
         if not env.env_exists():
             reply = QMessageBox.question(
                 self, "环境未就绪",
-                "Conda 环境尚未创建，是否现在创建并安装所有软件？",
+                "Conda 环境尚未创建，可能导致运行失败。\n\n"
+                "• 点击「是」：现在去创建环境并安装软件\n"
+                "• 点击「否」：仍要尝试运行（适合环境已就绪但未检测到的情况）",
                 QMessageBox.Yes | QMessageBox.No
             )
             if reply == QMessageBox.Yes:
@@ -1946,8 +1948,8 @@ class MainWindow(QMainWindow):
                 self.env_page._detect_conda()
                 self.env_page._create_env()
                 self.env_page._install_packages()
-            else:
                 return
+            # 选「否」则继续运行，不阻断
 
         # 构建分析上下文
         ctx = AnalysisContext(
