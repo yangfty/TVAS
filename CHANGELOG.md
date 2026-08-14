@@ -6,6 +6,16 @@
 
 ---
 
+## [0.1.7] - 2026-08-14
+
+### 精简
+- **删除冗余文件**：
+  - 删除 `debian/` 目录（Debian 打包规范文件，build.sh 用 heredoc 自动生成，未使用）
+  - 删除 `uos/` 目录（UOS 商店上架材料，build.sh 未引用）
+  - 删除 `rnaseq_app/resources/rnaseq-denovo.desktop`（build.sh 用 heredoc 自动生成）
+  - 删除 `run.sh`（功能与 README 中的 `python3 main.py` 重复）
+- **更新 README.md**：移除对已删文件的引用，更新项目结构说明
+
 ## [0.1.6] - 2026-08-14
 
 ### 新增

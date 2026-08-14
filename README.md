@@ -92,8 +92,7 @@ cd TVAS
 pip install PyQt5 --user
 
 # 启动
-chmod +x run.sh
-./run.sh
+python3 main.py
 ```
 
 ### 方式二：下载打包版本（推荐给同事使用）
@@ -148,7 +147,6 @@ sudo dpkg -i TVAS_V*.deb
 ```
 TVAS/
 ├── main.py                     # 程序入口
-├── run.sh                      # 开发模式启动脚本
 ├── build.sh                    # PyInstaller + deb 打包脚本
 ├── requirements.txt            # Python 依赖
 ├── rnaseq_app/
@@ -157,11 +155,9 @@ TVAS/
 │   ├── steps.py                # 11 个分析步骤
 │   ├── pipeline.py             # 流程编排 + 后台线程
 │   ├── main_window.py          # PyQt5 主界面
-│   ├── terminal_panel.py       # 环境终端面板（QTermWidget 真终端 / 兼容回退）
-│   └── resources/              # 图标、desktop 文件
-├── scripts/                    # 辅助脚本 (序列/GFF3 重命名)
-├── debian/                     # Debian 打包规范
-└── uos/                        # UOS 商店上架材料
+│   ├── terminal_panel.py       # 系统终端启动
+│   └── resources/              # 图标
+└── scripts/                    # 辅助脚本 (序列/GFF3 重命名)
 ```
 
 ## 贡献
