@@ -1789,7 +1789,7 @@ class MainWindow(QMainWindow):
 
         self.resume_btn = QPushButton("⚡ 续跑")
         self.resume_btn.clicked.connect(lambda: self._on_run_all(resume=True))
-        self.resume_btn.setStyleSheet(self._btn_style("#27ae60", "#229954"))
+        self.resume_btn.setStyleSheet(self._btn_style("#27ae60"))
         self.resume_btn.setToolTip("续跑模式：自动跳过输出已存在的步骤，从上次中断处继续")
         control_layout.addWidget(self.resume_btn)
 
