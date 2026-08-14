@@ -6,6 +6,16 @@
 
 ---
 
+## [0.1.8] - 2026-08-14
+
+### 修复
+- **面包屑导航 NameError**：
+  - 修复运行打包版本时 `_update_breadcrumb` 方法抛出 `NameError: name 'module_names' is not defined` 导致程序无法启动的问题
+  - 该变量在 V0.1.6 重构时已替换为全局常量 `MODULE_NAMES`，但漏改了 `_update_breadcrumb` 中的一处引用
+  - 现已统一使用 `MODULE_NAMES[0]`
+
+---
+
 ## [0.1.7] - 2026-08-14
 
 ### 精简

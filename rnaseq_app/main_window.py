@@ -2012,7 +2012,7 @@ class MainWindow(QMainWindow):
             "1. 环境设置", "2. 样本配置", "3. 参数配置", "4. 任务运行",
         ]
         sub = tab_labels[tab_idx] if 0 <= tab_idx < len(tab_labels) else ""
-        self.breadcrumb_label.setText(f"📍 {module_names[0]}  ›  {sub}")
+        self.breadcrumb_label.setText(f"📍 {MODULE_NAMES[0]}  ›  {sub}")
 
     # ---- 运行流程 ----
 
