@@ -134,6 +134,7 @@ def step_fastqc(env: CondaEnvManager, ctx: AnalysisContext,
     log("▶ FastQC 质量评估开始...")
 
     total = len(ctx.samples)
+    failed_samples = []
     for i, sample in enumerate(ctx.samples):
         # 取消检查
         if env.is_cancelled:
@@ -145,20 +146,28 @@ def step_fastqc(env: CondaEnvManager, ctx: AnalysisContext,
 
         # 检查文件是否存在
         if not os.path.exists(sample.r1_path):
-            log(f"    ⚠ R1文件不存在: {sample.r1_path}")
+            log(f"    ✗ R1文件不存在: {sample.r1_path}")
+            failed_samples.append(sample.replicate)
             continue
         if not os.path.exists(sample.r2_path):
-            log(f"    ⚠ R2文件不存在: {sample.r2_path}")
+            log(f"    ✗ R2文件不存在: {sample.r2_path}")
+            failed_samples.append(sample.replicate)
             continue
 
         cmd = f"fastqc {sample.r1_path} {sample.r2_path} -o {out_dir} -t {ctx.threads}"
-        ok, output = env.run_in_env(cmd, cwd=ctx.work_dir, timeout=600)
+        ok, output = env.run_in_env(cmd, cwd=ctx.work_dir, timeout=3600)
         if ok:
             log(f"    ✓ {sample.replicate} 完成")
         else:
             log(f"    ✗ {sample.replicate} 失败: {output[-200:]}")
+            failed_samples.append(sample.replicate)
 
     progress(100)
+    if failed_samples:
+        result.status = StepStatus.FAILED
+        result.message = f"FastQC 失败，样本: {', '.join(failed_samples)}"
+        log(f"✗ FastQC 失败，以下样本未完成: {', '.join(failed_samples)}")
+        return result
     result.status = StepStatus.SUCCESS
     result.message = f"FastQC 完成，输出目录: {out_dir}"
     return result
@@ -196,6 +205,7 @@ def step_fastp(env: CondaEnvManager, ctx: AnalysisContext,
     log(f"  参数: -q {quality_threshold} -l {min_length} --detect_adapter_for_pe")
 
     total = len(ctx.samples)
+    failed_samples = []
     for i, sample in enumerate(ctx.samples):
         # 取消检查
         if env.is_cancelled:
@@ -204,6 +214,11 @@ def step_fastp(env: CondaEnvManager, ctx: AnalysisContext,
             return result
         progress(int((i / total) * 100))
         log(f"  [{i+1}/{total}] {sample.replicate} ...")
+
+        if not os.path.exists(sample.r1_path) or not os.path.exists(sample.r2_path):
+            log(f"    ✗ 原始文件不存在: {sample.r1_path}")
+            failed_samples.append(sample.replicate)
+            continue
 
         out_r1 = os.path.join(out_dir, f"{sample.replicate}_R1_clean.fq.gz")
         out_r2 = os.path.join(out_dir, f"{sample.replicate}_R2_clean.fq.gz")
@@ -218,13 +233,19 @@ def step_fastp(env: CondaEnvManager, ctx: AnalysisContext,
             f"-w {ctx.threads} "
             f"--html {html} --json {json_rpt}"
         )
-        ok, output = env.run_in_env(cmd, cwd=ctx.work_dir, timeout=1200)
+        ok, output = env.run_in_env(cmd, cwd=ctx.work_dir, timeout=14400)
         if ok:
             log(f"    ✓ {sample.replicate} 过滤完成")
         else:
             log(f"    ✗ {sample.replicate} 失败: {output[-200:]}")
+            failed_samples.append(sample.replicate)
 
     progress(100)
+    if failed_samples:
+        result.status = StepStatus.FAILED
+        result.message = f"Fastp 失败，样本: {', '.join(failed_samples)}"
+        log(f"✗ Fastp 失败，以下样本未完成: {', '.join(failed_samples)}")
+        return result
     # 成功时标记 Trinity 输入源为 fastp
     ctx.trinity_input_stage = "fastp"
     result.status = StepStatus.SUCCESS
@@ -284,6 +305,7 @@ def step_rcorrector(env: CondaEnvManager, ctx: AnalysisContext,
             rcorrector_pl = "$CONDA_PREFIX/bin/run_rcorrector.pl"
 
     total = len(ctx.samples)
+    failed_samples = []
     for i, sample in enumerate(ctx.samples):
         # 取消检查
         if env.is_cancelled:
@@ -297,7 +319,8 @@ def step_rcorrector(env: CondaEnvManager, ctx: AnalysisContext,
         r2_clean = os.path.join(fastp_dir, f"{sample.replicate}_R2_clean.fq.gz")
 
         if not os.path.exists(r1_clean) or not os.path.exists(r2_clean):
-            log(f"    ⚠ 找不到过滤后的文件: {r1_clean}")
+            log(f"    ✗ 找不到过滤后的文件: {r1_clean}")
+            failed_samples.append(sample.replicate)
             continue
 
         cmd = (
@@ -306,13 +329,25 @@ def step_rcorrector(env: CondaEnvManager, ctx: AnalysisContext,
             f"-t {ctx.threads} "
             f"-od {out_dir}"
         )
-        ok, output = env.run_in_env(cmd, cwd=ctx.work_dir, timeout=1800)
+        ok, output = env.run_in_env(cmd, cwd=ctx.work_dir, timeout=86400)
         if ok:
-            log(f"    ✓ {sample.replicate} 纠错完成")
+            # 校验输出文件已生成
+            r1_out = os.path.join(out_dir, f"{sample.replicate}_R1_clean.cor.fq.gz")
+            if os.path.exists(r1_out):
+                log(f"    ✓ {sample.replicate} 纠错完成")
+            else:
+                log(f"    ✗ {sample.replicate} 未生成输出文件: {r1_out}")
+                failed_samples.append(sample.replicate)
         else:
             log(f"    ✗ {sample.replicate} 失败: {output[-200:]}")
+            failed_samples.append(sample.replicate)
 
     progress(100)
+    if failed_samples:
+        result.status = StepStatus.FAILED
+        result.message = f"Rcorrector 失败，样本: {', '.join(failed_samples)}"
+        log(f"✗ Rcorrector 失败，以下样本未完成: {', '.join(failed_samples)}")
+        return result
     # 成功时标记 Trinity 输入源为 rcorrector
     ctx.trinity_input_stage = "rcorrector"
     result.status = StepStatus.SUCCESS
@@ -355,6 +390,7 @@ def step_trinity_assemble(env: CondaEnvManager, ctx: AnalysisContext,
 
     # 生成 samples_file (Trinity 要求的格式)，根据输入源写不同路径
     samples_file = os.path.join(ctx.work_dir, "trinity_samples.txt")
+    missing_files = []
     with open(samples_file, "w", encoding="utf-8") as f:
         for s in ctx.samples:
             if input_stage == "rcorrector":
@@ -367,7 +403,21 @@ def step_trinity_assemble(env: CondaEnvManager, ctx: AnalysisContext,
                 # 原始 fq
                 r1_in = s.r1_path
                 r2_in = s.r2_path
+            # 校验输入文件存在，避免 Trinity 抛出晦涩错误
+            if not os.path.isfile(r1_in):
+                missing_files.append(r1_in)
+            if not os.path.isfile(r2_in):
+                missing_files.append(r2_in)
             f.write(f"{s.group}\t{s.replicate}\t{r1_in}\t{r2_in}\n")
+
+    if missing_files:
+        result.status = StepStatus.FAILED
+        result.message = "Trinity 输入文件缺失"
+        log("✗ Trinity 组装中止：以下输入文件不存在（上游步骤可能未完成该样本）:")
+        for mf in missing_files:
+            log(f"    - {mf}")
+        log("  请检查对应样本的上游步骤是否成功，或重跑失败步骤后重试")
+        return result
 
     result.status = StepStatus.RUNNING
     log(f"▶ Trinity 组装开始 (max_memory={max_memory}, CPU={ctx.threads})...")
