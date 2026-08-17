@@ -2107,7 +2107,7 @@ class MainWindow(QMainWindow):
             done_steps, todo_steps = self._scan_step_outputs(work_dir, active_steps)
 
             # 续跑安全策略：最后一个有输出的步骤可能因中途停止而未完成
-            # 删除该步骤的输出目录，确保从该步骤重新运行
+            # 将该步骤（及同目录步骤）标记为待重跑（删除推迟到用户确认后）
             rerun_steps = []
             if done_steps:
                 last_done = None
@@ -2117,10 +2117,7 @@ class MainWindow(QMainWindow):
                 if last_done:
                     last_dir = _STEP_OUTPUT_DIRS.get(last_done)
                     if last_dir:
-                        last_path = os.path.join(work_dir, last_dir)
                         affected = [s for s in done_steps if _STEP_OUTPUT_DIRS.get(s) == last_dir]
-                        if os.path.isdir(last_path):
-                            shutil.rmtree(last_path, ignore_errors=True)
                         for s in affected:
                             done_steps.remove(s)
                             if s not in todo_steps:
@@ -2137,9 +2134,19 @@ class MainWindow(QMainWindow):
             # 按 pipeline 顺序排序
             todo_steps = [s["id"] for s in PIPELINE_STEPS if s["id"] in todo_steps]
 
+            # 将要运行的步骤，其已有输出一律视为过期数据（基于旧上游结果生成），
+            # 确认后统一清除，避免残留旧文件混入新结果
+            stale_dirs = []
+            for sid in todo_steps:
+                d = _STEP_OUTPUT_DIRS.get(sid)
+                if d and d not in stale_dirs:
+                    full_path = os.path.join(work_dir, d)
+                    if os.path.isdir(full_path) and os.listdir(full_path):
+                        stale_dirs.append(d)
+
             done_names = [f"  ✓ 步骤{i+1}. {s['name']}" for i, s in enumerate(PIPELINE_STEPS) if s["id"] in done_steps]
             todo_names = [f"  ▶ 步骤{i+1}. {s['name']}" for i, s in enumerate(PIPELINE_STEPS) if s["id"] in todo_steps and s["id"] not in rerun_steps]
-            rerun_names = [f"  🔄 步骤{i+1}. {s['name']}（已清除旧输出）" for i, s in enumerate(PIPELINE_STEPS) if s["id"] in rerun_steps]
+            rerun_names = [f"  🔄 步骤{i+1}. {s['name']}" for i, s in enumerate(PIPELINE_STEPS) if s["id"] in rerun_steps]
 
             report_parts = [
                 "续跑模式 — 步骤状态扫描\n",
@@ -2148,11 +2155,17 @@ class MainWindow(QMainWindow):
             if done_names:
                 report_parts.append("✅ 已完成（将跳过）:\n" + "\n".join(done_names) + "\n")
             if rerun_names:
-                report_parts.append("🔄 可能未完成，已清除输出并重新运行:\n" + "\n".join(rerun_names) + "\n")
+                report_parts.append("🔄 可能未完成（将重新运行）:\n" + "\n".join(rerun_names) + "\n")
             if todo_names:
                 report_parts.append("▶ 未运行（将执行）:\n" + "\n".join(todo_names) + "\n")
+            if stale_dirs:
+                report_parts.append(
+                    "🗑 将清除的过期输出（将运行步骤的旧结果，含中途停止的残留）:\n"
+                    + "\n".join(f"  📂 {d}" for d in stale_dirs) + "\n"
+                )
             report_parts.append(
-                "💡 最后一个有输出的步骤可能因中途停止而未完成，已自动清除并重新运行。\n\n"
+                "💡 从中间步骤续跑时，该步骤及其后所有步骤的旧输出都会被清除后重新运行，\n"
+                "   以确保下游结果基于最新数据。\n\n"
                 "是否开始续跑？"
             )
             reply = QMessageBox.question(
@@ -2162,6 +2175,15 @@ class MainWindow(QMainWindow):
             if reply != QMessageBox.Yes:
                 return
 
+            # 确认后清除将运行步骤的过期输出
+            for d in stale_dirs:
+                full_path = os.path.join(work_dir, d)
+                try:
+                    shutil.rmtree(full_path)
+                    self._log(f"  🗑 已清除过期输出: {d}")
+                except Exception as e:
+                    self._log(f"  ⚠ 清除失败: {d} ({e})")
+
             self._log("\n" + "=" * 60)
             self._log("  ⚡ 续跑模式：跳过已完成的步骤")
             self._log(f"  工作目录: {work_dir}")
@@ -2170,7 +2192,7 @@ class MainWindow(QMainWindow):
                 rerun_log = ", ".join(
                     f"步骤{i+1}" for i, s in enumerate(PIPELINE_STEPS) if s["id"] in rerun_steps
                 )
-                self._log(f"  🔄 已清除可能未完成的步骤输出: {rerun_log}")
+                self._log(f"  🔄 可能未完成，将重新运行: {rerun_log}")
             self._log("=" * 60)
         else:
             # 从头运行：确认是否清空工作目录
