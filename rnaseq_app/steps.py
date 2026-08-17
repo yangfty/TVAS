@@ -187,16 +187,6 @@ def step_fastp(env: CondaEnvManager, ctx: AnalysisContext,
 
     out_dir = os.path.join(ctx.work_dir, "02_fastp_clean")
 
-    # 续跑模式：检查输出目录是否已存在且有内容
-    if ctx.resume_mode and os.path.isdir(out_dir) and os.listdir(out_dir):
-        ctx.fastp_dir = out_dir
-        # 续跑时也需告知下游 Trinity 使用 fastp 输出
-        ctx.trinity_input_stage = "fastp"
-        result.status = StepStatus.SKIPPED
-        result.message = f"输出已存在，续跑模式跳过: {out_dir}"
-        log(f"  ⚡ 跳过（输出已存在）: {out_dir}")
-        return result
-
     os.makedirs(out_dir, exist_ok=True)
     ctx.fastp_dir = out_dir
 
@@ -222,6 +212,13 @@ def step_fastp(env: CondaEnvManager, ctx: AnalysisContext,
 
         out_r1 = os.path.join(out_dir, f"{sample.replicate}_R1_clean.fq.gz")
         out_r2 = os.path.join(out_dir, f"{sample.replicate}_R2_clean.fq.gz")
+
+        # 样本级续跑：输出已存在且非空才跳过（防止上次中途停止留下的空/截断文件）
+        if (os.path.isfile(out_r1) and os.path.getsize(out_r1) > 0
+                and os.path.isfile(out_r2) and os.path.getsize(out_r2) > 0):
+            log(f"    ⚡ 输出已存在，跳过")
+            continue
+
         html = os.path.join(out_dir, f"{sample.replicate}_fastp.html")
         json_rpt = os.path.join(out_dir, f"{sample.replicate}_fastp.json")
 
@@ -259,16 +256,6 @@ def step_rcorrector(env: CondaEnvManager, ctx: AnalysisContext,
     result = StepResult("rcorrector", "Rcorrector 纠错")
 
     out_dir = os.path.join(ctx.work_dir, "03_rcorrector")
-
-    # 续跑模式：检查输出目录是否已存在且有内容
-    if ctx.resume_mode and os.path.isdir(out_dir) and os.listdir(out_dir):
-        ctx.rcorrector_dir = out_dir
-        # 续跑时也需告知下游 Trinity 使用 rcorrector 输出
-        ctx.trinity_input_stage = "rcorrector"
-        result.status = StepStatus.SKIPPED
-        result.message = f"输出已存在，续跑模式跳过: {out_dir}"
-        log(f"  ⚡ 跳过（输出已存在）: {out_dir}")
-        return result
 
     fastp_dir = ctx.fastp_dir or os.path.join(ctx.work_dir, "02_fastp_clean")
     if not os.path.isdir(fastp_dir):
@@ -322,6 +309,19 @@ def step_rcorrector(env: CondaEnvManager, ctx: AnalysisContext,
             log(f"    ✗ 找不到过滤后的文件: {r1_clean}")
             failed_samples.append(sample.replicate)
             continue
+
+        # 样本级续跑：输出存在且非空且 gzip 完整性通过才跳过
+        # （防止上次超时/中途停止留下的空文件或被截断的文件）
+        r1_out = os.path.join(out_dir, f"{sample.replicate}_R1_clean.cor.fq.gz")
+        r2_out = os.path.join(out_dir, f"{sample.replicate}_R2_clean.cor.fq.gz")
+        if (os.path.isfile(r1_out) and os.path.getsize(r1_out) > 0
+                and os.path.isfile(r2_out) and os.path.getsize(r2_out) > 0):
+            ok1, _ = env.run_in_env(f"gzip -t {r1_out}", timeout=7200)
+            ok2, _ = env.run_in_env(f"gzip -t {r2_out}", timeout=7200)
+            if ok1 and ok2:
+                log(f"    ⚡ 输出已存在且完整，跳过")
+                continue
+            log(f"    ⚠ 上次输出不完整（文件被截断），重新纠错")
 
         cmd = (
             f"perl {rcorrector_pl} "
@@ -390,7 +390,8 @@ def step_trinity_assemble(env: CondaEnvManager, ctx: AnalysisContext,
 
     # 生成 samples_file (Trinity 要求的格式)，根据输入源写不同路径
     samples_file = os.path.join(ctx.work_dir, "trinity_samples.txt")
-    missing_files = []
+    bad_files = []
+    all_inputs = []
     with open(samples_file, "w", encoding="utf-8") as f:
         for s in ctx.samples:
             if input_stage == "rcorrector":
@@ -403,20 +404,34 @@ def step_trinity_assemble(env: CondaEnvManager, ctx: AnalysisContext,
                 # 原始 fq
                 r1_in = s.r1_path
                 r2_in = s.r2_path
-            # 校验输入文件存在，避免 Trinity 抛出晦涩错误
-            if not os.path.isfile(r1_in):
-                missing_files.append(r1_in)
-            if not os.path.isfile(r2_in):
-                missing_files.append(r2_in)
+            all_inputs.extend([r1_in, r2_in])
+            # 校验输入文件存在且非空
+            for p in (r1_in, r2_in):
+                if not os.path.isfile(p):
+                    bad_files.append(f"{p} (文件不存在)")
+                elif os.path.getsize(p) == 0:
+                    bad_files.append(f"{p} (空文件)")
             f.write(f"{s.group}\t{s.replicate}\t{r1_in}\t{r2_in}\n")
 
-    if missing_files:
+    # gzip 完整性校验：检测上游中途被杀导致的截断文件
+    if not bad_files:
+        log("  校验输入文件完整性 (gzip -t)，大文件可能需要几分钟...")
+        for p in all_inputs:
+            if not p.endswith(".gz"):
+                continue
+            ok, _ = env.run_in_env(f"gzip -t {p}", timeout=7200)
+            if not ok:
+                bad_files.append(f"{p} (文件损坏/不完整)")
+            else:
+                log(f"    ✓ {os.path.basename(p)}")
+
+    if bad_files:
         result.status = StepStatus.FAILED
-        result.message = "Trinity 输入文件缺失"
-        log("✗ Trinity 组装中止：以下输入文件不存在（上游步骤可能未完成该样本）:")
-        for mf in missing_files:
+        result.message = "Trinity 输入文件缺失或不完整"
+        log("✗ Trinity 组装中止：以下输入文件不可用（上游步骤可能失败或中途停止）:")
+        for mf in bad_files:
             log(f"    - {mf}")
-        log("  请检查对应样本的上游步骤是否成功，或重跑失败步骤后重试")
+        log("  请删除对应步骤的输出文件夹后重跑该步骤（例如 03_rcorrector），再运行 Trinity")
         return result
 
     result.status = StepStatus.RUNNING
