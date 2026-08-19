@@ -117,6 +117,11 @@ PACKAGES = [
         required=True, description="k-mer 计数（Trinity 依赖）",
     ),
     PackageSpec(
+        name="samtools",
+        verify_cmd="samtools --version",
+        required=True, description="BAM/SAM 处理（Trinity 依赖，需 ≥1.3）",
+    ),
+    PackageSpec(
         name="cd-hit", version="4.8",
         verify_cmd="cd-hit --version",
         required=True, description="转录本聚类去冗余",

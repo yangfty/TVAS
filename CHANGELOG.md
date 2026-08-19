@@ -6,6 +6,16 @@
 
 ---
 
+## [0.1.12] - 2026-08-17
+
+### 修复
+- **补装 samtools（Trinity 运行时依赖）**：
+  - 环境安装清单新增 samtools（不锁版本，保证满足 Trinity 要求的 ≥1.3）
+  - 修复 Trinity 组装启动即失败的问题：`Error, need samtools installed that is at least as new as version 1.3`
+  - 已建好的环境无需重建：到「环境设置」页重新点击安装即可补装缺失的 samtools
+
+---
+
 ## [0.1.11] - 2026-08-17
 
 ### 修复
