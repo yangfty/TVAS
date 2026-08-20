@@ -9,14 +9,16 @@
 """
 
 import os
+import re
 import sys
+import json
 import subprocess
 import shutil
 import urllib.request
 import stat
 import threading
 from datetime import datetime
-from typing import Tuple, List, Optional
+from typing import Tuple, List, Dict, Optional
 from dataclasses import dataclass, field
 
 
@@ -553,7 +555,7 @@ class CondaEnvManager:
         """查询环境中某软件包的实际安装版本（未安装返回空）"""
         try:
             rc, out, _ = self._exec(
-                [self._conda_exe, "list", "-n", self.env_name, pkg_name], 30
+                [self._conda_exe, "list", "-n", self.env_name, pkg_name], 60
             )
             if rc != 0:
                 return ""
@@ -564,6 +566,39 @@ class CondaEnvManager:
         except Exception:
             pass
         return ""
+
+    def get_versions_bulk(self) -> Dict[str, str]:
+        """一次 conda list --json 获取环境内全部 {包名小写: 版本}。
+
+        比逐包 conda list 查询快得多（一次进程调用），
+        且 JSON 输出不依赖文本列对齐，更可靠。
+        """
+        try:
+            rc, out, _ = self._exec(
+                [self._conda_exe, "list", "-n", self.env_name, "--json"], 180)
+            if rc != 0 or not out.strip():
+                return {}
+            data = json.loads(out)
+            versions: Dict[str, str] = {}
+            for item in data:
+                name = (item.get("name") or "").strip().lower()
+                if name:
+                    versions[name] = item.get("version") or ""
+            return versions
+        except Exception:
+            return {}
+
+    @staticmethod
+    def version_from_output(output: str) -> str:
+        """从工具自身的 --version 输出中提取版本号（兜底用）。
+
+        如 "Trinity version: Trinity-v2.15.2" → "2.15.2"
+           "kallisto 0.51.1" → "0.51.1"
+        """
+        if not output:
+            return ""
+        m = re.search(r'v?(\d+\.\d+(?:\.\d+)?)', output)
+        return m.group(1) if m else ""
 
     def uninstall_package(self, pkg_name: str) -> Tuple[bool, str]:
         """卸载环境中的单个软件包"""

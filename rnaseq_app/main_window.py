@@ -597,10 +597,11 @@ class EnvSetupPage(QWidget):
         self.pkg_table.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.pkg_table.verticalHeader().setVisible(False)
         self.pkg_table.setAlternatingRowColors(True)
-        self.pkg_table.setMinimumHeight(300)
+        self.pkg_table.setMinimumHeight(360)
         self.pkg_table.setToolTip("选中一行可单独重装；双击行也触发重装")
         self._populate_pkg_table()
-        g2_layout.addWidget(self.pkg_table)
+        # stretch=1: 表格占据组内所有额外空间，随窗口放大而放大
+        g2_layout.addWidget(self.pkg_table, 1)
 
         # 主操作按钮行（次要操作收纳在「更多操作」菜单中）
         pkg_btn_layout = QHBoxLayout()
@@ -678,7 +679,8 @@ class EnvSetupPage(QWidget):
         # 双击某行也触发重装
         self.pkg_table.itemDoubleClicked.connect(self._retry_package)
 
-        layout.addWidget(group2)
+        # stretch=1: 软件包安装组占据页面剩余空间，表格随窗口同步变大
+        layout.addWidget(group2, 1)
 
         # 自定义安装（装额外软件包，如 salmon / hisat2）
         custom_row = QHBoxLayout()
@@ -695,8 +697,6 @@ class EnvSetupPage(QWidget):
         self.custom_install_btn.setStyleSheet(_btn_style("#7f8c8d", "#6c7a7a"))
         custom_row.addWidget(self.custom_install_btn)
         g2_layout.addLayout(custom_row)
-
-        layout.addStretch()
 
     def _populate_pkg_table(self):
         """填充内置软件包列表（版本列留空，安装后显示实际版本）"""
@@ -834,6 +834,7 @@ class EnvSetupPage(QWidget):
     def _on_install_done(self, ok, msg):
         env = self.get_env_manager()
         results = self._install_results
+        versions = env.get_versions_bulk() if any(s for _, s, _ in results) else {}
         for i, (name, success, _) in enumerate(results):
             if i >= len(PACKAGES):
                 continue
@@ -841,7 +842,9 @@ class EnvSetupPage(QWidget):
             status_item.setText("✓ 已安装" if success else "✗ 失败")
             status_item.setForeground(QColor(COLORS["success"] if success else COLORS["error"]))
             if success:
-                ver = env.get_package_version(name)
+                ver = versions.get(name.lower(), "")
+                if not ver:
+                    ver = env.get_package_version(name)
                 if ver:
                     self.pkg_table.item(i, 1).setText(ver)
 
@@ -917,6 +920,7 @@ class EnvSetupPage(QWidget):
     def _on_retry_done(self, ok, msg):
         env = self.get_env_manager()
         results = self._retry_results
+        versions = env.get_versions_bulk() if any(s for _, s, _ in results) else {}
         for pkg_name, success, _ in results:
             row = self._find_pkg_row(pkg_name)
             if row < 0:
@@ -928,7 +932,9 @@ class EnvSetupPage(QWidget):
                     QColor(COLORS["success"] if success else COLORS["error"])
                 )
             if success:
-                ver = env.get_package_version(pkg_name)
+                ver = versions.get(pkg_name.lower(), "")
+                if not ver:
+                    ver = env.get_package_version(pkg_name)
                 ver_item = self.pkg_table.item(row, 1)
                 if ver_item and ver:
                     ver_item.setText(ver)
@@ -962,7 +968,8 @@ class EnvSetupPage(QWidget):
     def _on_verify_done(self, ok, msg):
         env = self.get_env_manager()
         results = self._verify_results
-        for i, (name, success, _) in enumerate(results):
+        versions = env.get_versions_bulk()
+        for i, (name, success, verify_msg) in enumerate(results):
             row = self._find_pkg_row(name)
             if row < 0:
                 continue
@@ -973,10 +980,15 @@ class EnvSetupPage(QWidget):
             else:
                 item.setText("✗ 未通过")
                 item.setForeground(QColor(COLORS["error"]))
-            # 顺带回填实际版本
-            ver = env.get_package_version(name)
-            if ver:
-                self.pkg_table.item(row, 1).setText(ver)
+            # 回填实际版本：conda 批量查询 → 验证命令输出提取（双保险）
+            if success:
+                ver = versions.get(name.lower(), "")
+                if not ver:
+                    ver = env.get_package_version(name)
+                if not ver:
+                    ver = env.version_from_output(verify_msg)
+                if ver:
+                    self.pkg_table.item(row, 1).setText(ver)
         QMessageBox.information(
             self, "验证完成",
             f"软件包验证完成\n{msg}\n具体状态请查看表格。"
@@ -1129,7 +1141,13 @@ class EnvSetupPage(QWidget):
         env = self.get_env_manager()
 
         # 把自定义包加入表格（已存在则更新版本/状态）
-        ver = env.get_package_version(base_name) if ok else ""
+        ver = ""
+        if ok:
+            ver = env.get_versions_bulk().get(base_name.lower(), "")
+            if not ver:
+                ver = env.get_package_version(base_name)
+            if not ver:
+                ver = env.version_from_output(msg)
         row = self._find_pkg_row(base_name)
         if row < 0:
             self._add_custom_pkg_row(
@@ -1269,9 +1287,13 @@ class EnvSetupPage(QWidget):
         self._set_env_busy(True, "正在刷新已安装版本")
 
         def task_fn():
+            # 一次批量查询所有包版本（比逐包查询快得多）
+            bulk = env.get_versions_bulk()
             results = []
             for i, name in enumerate(pkg_names):
-                ver = env.get_package_version(name) if name else ""
+                ver = bulk.get(name.lower(), "") if name else ""
+                if name and not ver:
+                    ver = env.get_package_version(name)
                 results.append((i, ver))
             # 结果存到实例属性，on_done 从这里读
             # （EnvTaskWorker 会把第二个返回值 str() 化，不能直接传 list）
