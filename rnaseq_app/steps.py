@@ -403,14 +403,13 @@ def step_trinity_assemble(env: CondaEnvManager, ctx: AnalysisContext,
         return result
     log(f"    ✓ samtools {st_ver}")
 
-    # Trinity 版本预警：2.13 及更早版本的 samtools 版本探测有缺陷，
-    # 可能出现"samtools 已装却报缺失"的兼容问题
+    # Trinity 版本预警：2.13 及更早版本另有 samtools 版本探测缺陷，
+    # 与本机插件兼容性问题无关，仅提示建议升级
     _, tv_out = env.run_in_env("Trinity --version", timeout=120)
     m_tv = re.search(r'Trinity[- ]v?(\d+)\.(\d+)', tv_out or "")
     if m_tv and (int(m_tv.group(1)), int(m_tv.group(2))) < (2, 14):
-        log(f"    ⚠ 检测到旧版 Trinity {m_tv.group(1)}.{m_tv.group(2)}")
-        log("    ⚠ 旧版 Trinity 对新版 samtools 的版本探测存在兼容缺陷，可能导致组装启动失败")
-        log(f"    建议升级: {getattr(env, '_conda_exe', 'conda')} install -n {env.env_name} -y -c bioconda -c conda-forge trinity=2.15.2")
+        log(f"    ⚠ 检测到旧版 Trinity {m_tv.group(1)}.{m_tv.group(2)}，建议升级以获得更好的兼容性")
+        log(f"    升级命令: {getattr(env, '_conda_exe', 'conda')} install -n {env.env_name} -y -c bioconda -c conda-forge trinity=2.15.2")
 
     # 智能选择输入源：根据上游实际运行情况选择 reads 来源
     # rcorrector > fastp > 原始fq
@@ -473,9 +472,46 @@ def step_trinity_assemble(env: CondaEnvManager, ctx: AnalysisContext,
     result.status = StepStatus.RUNNING
     log(f"▶ Trinity 组装开始 (max_memory={max_memory}, CPU={ctx.threads})...")
     log(f"  样本文件: {samples_file}")
+
+    # 体检 Trinity 自带插件二进制并隔离坏件：
+    # Trinity 启动时会把 trinity-plugins/BIN 前置到 PATH（Trinity 源码
+    # $ENV{PATH} = "$ROOTDIR/trinity-plugins/BIN:$ENV{PATH}"），
+    # bioconda 包在该目录捆绑的预编译二进制（samtools/jellyfish 等）在
+    # ARM 架构或较旧 glibc 的系统上可能无法执行（Exec format error）。
+    # Trinity 内部调用 "samtools --version" 拿到的是 shell 报错（含完整
+    # 路径），按空白切分后把路径当作版本号，导致
+    # 'Argument "/home/xxx/" isn't numeric ... need samtools >= 1.3' 误报。
+    # 逐个检测捆绑插件，无法执行的改名 *.TVAS_broken 隔离，
+    # PATH 将自动回退到 conda 环境中的同名工具（预检查已确认可用）。
+    plugin_check = (
+        'TB=$(readlink -f "$(command -v Trinity)") && TH=$(dirname "$(dirname "$TB")"); '
+        'find "$TH/trinity-plugins" -type d -name BIN 2>/dev/null | while read -r d; do '
+        '  for t in "$d"/*; do '
+        '    [ -f "$t" ] && [ -x "$t" ] || continue; '
+        '    case "$t" in *.TVAS_broken) continue;; esac; '
+        '    timeout 15 "$t" --version >/dev/null 2>&1; rc=$?; '
+        '    if [ "$rc" -eq 126 ]; then '
+        '      mv "$t" "$t.TVAS_broken" && echo "TVAS_ISOLATED:$(basename "$t")"; '
+        '    fi; '
+        '  done; '
+        'done; true'
+    )
+    ok_pc, pc_out = env.run_in_env(plugin_check, timeout=600)
+    for line in (pc_out or "").splitlines():
+        if line.startswith("TVAS_ISOLATED:"):
+            name = line.split(":", 1)[1]
+            log(f"  ⚠ 已自动隔离无法运行的 Trinity 捆绑插件: {name}")
+            log("    （该插件与本机不兼容，已改名为 *.TVAS_broken，改用 conda 环境版本）")
+
     log("  ⚠ Trinity 组装可能需要数小时甚至数天，请耐心等待...")
 
     cmd = (
+        # Trinity 启动时会把自带的旧版 htslib 目录追加到 LD_LIBRARY_PATH，
+        # 污染 conda samtools 的动态库解析，导致 samtools 加载错误库而
+        # 启动失败，进而被 Trinity 误判为"samtools 未安装/版本过低"。
+        # 把 conda 环境的 lib 目录前置到 LD_LIBRARY_PATH 最前面，
+        # 确保 samtools 优先加载匹配版本的 libhts。
+        'export LD_LIBRARY_PATH="${CONDA_PREFIX:-$HOME/.local/share/TVAS/miniconda/envs/' + env.env_name + '}/lib:${LD_LIBRARY_PATH:-}"; '
         f"Trinity --seqType fq --samples_file {samples_file} "
         f"--max_memory {max_memory} --CPU {ctx.threads} "
         f"--output {out_dir}"
@@ -508,12 +544,26 @@ def step_trinity_assemble(env: CondaEnvManager, ctx: AnalysisContext,
             err_show = err_text
         log(f"✗ Trinity 组装失败:\n{err_show}")
         # 自动诊断：samtools 实际已装（预检查通过）但 Trinity 报缺失 →
-        # 旧版 Trinity 版本探测缺陷
+        # Trinity 把自带 trinity-plugins/BIN 前置到 PATH，捆绑二进制
+        # 与本机不兼容时其报错输出被当作版本号解析，造成误报
         if "need samtools installed" in err_text and st_ver:
-            log("  ℹ 诊断: samtools 实际已安装且版本达标（预检查通过），")
-            log("     这是旧版 Trinity 自身的 samtools 版本探测缺陷，与你的环境无关。")
-            log(f"  解决方法 - 升级 Trinity 后重试:")
-            log(f"     {getattr(env, '_conda_exe', 'conda')} install -n {env.env_name} -y -c bioconda -c conda-forge trinity=2.15.2")
+            log("  ℹ 诊断: samtools 实际已安装且版本达标（预检查通过）。")
+            log("     已知原因: Trinity 启动时把自带 trinity-plugins/BIN 目录前置到 PATH，")
+            log("     其中捆绑的预编译二进制若与本机不兼容（无法执行），")
+            log("     Trinity 解析其报错输出时就会误判为 samtools 缺失/版本过低。")
+            # 自动复现 "Trinity 视角"（plugins/BIN 前置到 PATH）下的 samtools
+            # 调用，把真实输出打进日志，便于定位
+            diag_cmd = (
+                'TB=$(readlink -f "$(command -v Trinity)") && TH=$(dirname "$(dirname "$TB")"); '
+                'export PATH="$TH/trinity-plugins/BIN:$PATH"; '
+                'echo "[诊断] Trinity 视角下 command -v samtools:"; command -v samtools; '
+                'echo "[诊断] Trinity 视角下 samtools --version 实际输出:"; '
+                'samtools --version 2>&1 | head -3'
+            )
+            _, d_out = env.run_in_env(diag_cmd, timeout=120)
+            for line in (d_out or "").strip().splitlines()[:12]:
+                log(f"    {line.strip()}")
+            log("  本次运行已自动隔离无法执行的捆绑插件，请直接重试本步骤。")
         result.status = StepStatus.FAILED
         result.message = "Trinity 组装失败"
         return result
