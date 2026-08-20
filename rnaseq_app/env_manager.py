@@ -106,7 +106,7 @@ PACKAGES = [
         required=True, description="RNA-seq reads 纠错",
     ),
     PackageSpec(
-        name="trinity", version="2.8",
+        name="trinity", version="2.15",
         extra_channels=["conda-forge"],
         verify_cmd="Trinity --version",
         required=True, description="de novo 转录本组装",

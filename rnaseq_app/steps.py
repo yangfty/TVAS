@@ -403,6 +403,15 @@ def step_trinity_assemble(env: CondaEnvManager, ctx: AnalysisContext,
         return result
     log(f"    ✓ samtools {st_ver}")
 
+    # Trinity 版本预警：2.13 及更早版本的 samtools 版本探测有缺陷，
+    # 可能出现"samtools 已装却报缺失"的兼容问题
+    _, tv_out = env.run_in_env("Trinity --version", timeout=120)
+    m_tv = re.search(r'Trinity[- ]v?(\d+)\.(\d+)', tv_out or "")
+    if m_tv and (int(m_tv.group(1)), int(m_tv.group(2))) < (2, 14):
+        log(f"    ⚠ 检测到旧版 Trinity {m_tv.group(1)}.{m_tv.group(2)}")
+        log("    ⚠ 旧版 Trinity 对新版 samtools 的版本探测存在兼容缺陷，可能导致组装启动失败")
+        log(f"    建议升级: {getattr(env, '_conda_exe', 'conda')} install -n {env.env_name} -y -c bioconda -c conda-forge trinity=2.15.2")
+
     # 智能选择输入源：根据上游实际运行情况选择 reads 来源
     # rcorrector > fastp > 原始fq
     input_stage = ctx.trinity_input_stage or "raw"
@@ -498,6 +507,13 @@ def step_trinity_assemble(env: CondaEnvManager, ctx: AnalysisContext,
         else:
             err_show = err_text
         log(f"✗ Trinity 组装失败:\n{err_show}")
+        # 自动诊断：samtools 实际已装（预检查通过）但 Trinity 报缺失 →
+        # 旧版 Trinity 版本探测缺陷
+        if "need samtools installed" in err_text and st_ver:
+            log("  ℹ 诊断: samtools 实际已安装且版本达标（预检查通过），")
+            log("     这是旧版 Trinity 自身的 samtools 版本探测缺陷，与你的环境无关。")
+            log(f"  解决方法 - 升级 Trinity 后重试:")
+            log(f"     {getattr(env, '_conda_exe', 'conda')} install -n {env.env_name} -y -c bioconda -c conda-forge trinity=2.15.2")
         result.status = StepStatus.FAILED
         result.message = "Trinity 组装失败"
         return result
