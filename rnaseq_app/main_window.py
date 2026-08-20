@@ -29,6 +29,7 @@
 import os
 import sys
 import shutil
+from datetime import datetime
 from typing import List, Optional
 
 from PyQt5.QtWidgets import (
@@ -39,10 +40,10 @@ from PyQt5.QtWidgets import (
     QTableWidget, QTableWidgetItem, QHeaderView, QCheckBox, QGroupBox,
     QFormLayout, QAbstractItemView, QGridLayout,
     QPlainTextEdit, QAction, QScrollArea,
-    QMenu,
+    QMenu, QDialog, QComboBox, QTextEdit,
 )
-from PyQt5.QtCore import Qt, QThread, pyqtSlot, pyqtSignal
-from PyQt5.QtGui import QColor, QTextCursor
+from PyQt5.QtCore import Qt, QThread, pyqtSlot, pyqtSignal, QUrl
+from PyQt5.QtGui import QColor, QTextCursor, QFont, QDesktopServices
 
 from .config import ConfigManager
 from .env_manager import (
@@ -499,10 +500,14 @@ class EnvSetupPage(QWidget):
             if isinstance(win, QMainWindow):
                 win.statusBar().showMessage(f"⏳ {label}，请稍候...")
             for w in (
-                self.install_btn, self.verify_btn, self.more_btn,
-                self.custom_install_btn,
-                self.uninstall_btn, self.uninstall_all_btn,
-                self.retry_btn, self.create_env_btn, self.detect_btn,
+                self.install_btn, self.verify_btn,
+                self.custom_install_btn, self.create_env_btn, self.detect_btn,
+            ):
+                w.setEnabled(False)
+            # 菜单中仅禁用操作类项，保留「查看安装日志」可实时查看安装进度
+            for w in (
+                self.retry_btn, self.uninstall_btn, self.uninstall_all_btn,
+                self.open_term_act, self.refresh_ver_act,
             ):
                 w.setEnabled(False)
         else:
@@ -522,6 +527,9 @@ class EnvSetupPage(QWidget):
             self.open_term_act, self.refresh_ver_act,
         ):
             w.setEnabled(ready)
+        # 查看安装日志始终可用（不依赖环境状态）
+        self.view_log_act.setEnabled(True)
+        self.open_log_dir_act.setEnabled(True)
 
     def _setup_ui(self):
         # 外层滚动区域（解决窗口小内容被挤压的问题）
@@ -605,41 +613,56 @@ class EnvSetupPage(QWidget):
         self.verify_btn.setEnabled(False)
         self.verify_btn.setStyleSheet(_btn_style(COLORS['success'], "#219150"))
 
-        # 「更多操作」下拉菜单（重装/卸载等次要操作）
+        # 「更多操作」下拉菜单（按 日志 / 安装 / 环境 / 危险操作 分组）
         self.more_menu = QMenu(self)
+
+        # -- 日志 --
+        self.view_log_act = QAction("📄 查看安装日志", self)
+        self.view_log_act.triggered.connect(self._show_install_log)
+        self.view_log_act.setToolTip("查看每次安装的详细日志（含每个软件包的完整安装输出，用于排查失败原因）")
+        self.more_menu.addAction(self.view_log_act)
+
+        self.open_log_dir_act = QAction("📂 打开日志文件夹", self)
+        self.open_log_dir_act.triggered.connect(self._open_install_log_dir)
+        self.open_log_dir_act.setToolTip("在文件管理器中打开安装日志所在文件夹")
+        self.more_menu.addAction(self.open_log_dir_act)
+
+        self.more_menu.addSeparator()
+
+        # -- 安装/刷新 --
         self.retry_btn = QAction("↻ 重装选中软件包", self)
         self.retry_btn.triggered.connect(lambda: self._retry_package())
         self.retry_btn.setToolTip("在表格中选中一行（可多选），点击后仅重装选中的软件包")
         self.retry_btn.setEnabled(False)
         self.more_menu.addAction(self.retry_btn)
 
+        self.refresh_ver_act = QAction("⟳ 刷新已安装版本", self)
+        self.refresh_ver_act.triggered.connect(self._refresh_versions_from_env)
+        self.refresh_ver_act.setToolTip("在终端中安装/卸载软件后，从环境读取版本刷新表格")
+        self.refresh_ver_act.setEnabled(False)
+        self.more_menu.addAction(self.refresh_ver_act)
+
+        # -- 环境 --
+        self.open_term_act = QAction("⌨ 打开系统终端", self)
+        self.open_term_act.triggered.connect(self._open_system_terminal)
+        self.open_term_act.setToolTip("启动 UOS 系统终端，进入分析环境（conda activate + cd 工作目录）")
+        self.open_term_act.setEnabled(False)
+        self.more_menu.addAction(self.open_term_act)
+
+        self.more_menu.addSeparator()
+
+        # -- 危险操作 --
         self.uninstall_btn = QAction("✕ 卸载选中软件包", self)
         self.uninstall_btn.triggered.connect(lambda: self._uninstall_package())
         self.uninstall_btn.setToolTip("在表格中选中一行（可多选），点击后仅卸载选中的软件包")
         self.uninstall_btn.setEnabled(False)
         self.more_menu.addAction(self.uninstall_btn)
 
-        self.more_menu.addSeparator()
-
         self.uninstall_all_btn = QAction("🗑 卸载全部（删除环境重建）", self)
         self.uninstall_all_btn.triggered.connect(self._uninstall_all)
         self.uninstall_all_btn.setToolTip("删除整个分析环境并清空，之后需重新创建环境并安装软件")
         self.uninstall_all_btn.setEnabled(False)
         self.more_menu.addAction(self.uninstall_all_btn)
-
-        self.more_menu.addSeparator()
-
-        self.open_term_act = QAction("打开系统终端", self)
-        self.open_term_act.triggered.connect(self._open_system_terminal)
-        self.open_term_act.setToolTip("启动 UOS 系统终端，进入分析环境（conda activate + cd 工作目录）")
-        self.open_term_act.setEnabled(False)
-        self.more_menu.addAction(self.open_term_act)
-
-        self.refresh_ver_act = QAction("刷新已安装版本", self)
-        self.refresh_ver_act.triggered.connect(self._refresh_versions_from_env)
-        self.refresh_ver_act.setToolTip("在终端中安装/卸载软件后，从环境读取版本刷新表格")
-        self.refresh_ver_act.setEnabled(False)
-        self.more_menu.addAction(self.refresh_ver_act)
 
         self.more_btn = QPushButton("更多操作 ▾")
         self.more_btn.setMenu(self.more_menu)
@@ -797,7 +820,11 @@ class EnvSetupPage(QWidget):
         self._set_env_busy(True, "正在安装软件包")
 
         def task_fn():
-            results = env.install_all_packages()
+            env.begin_install_session("安装全部软件包")
+            try:
+                results = env.install_all_packages()
+            finally:
+                env.end_install_session()
             self._install_results = results
             ok = all(s for _, s, _ in results)
             return ok, f"成功 {sum(1 for _, s, _ in results if s)}/{len(results)}"
@@ -819,11 +846,17 @@ class EnvSetupPage(QWidget):
                     self.pkg_table.item(i, 1).setText(ver)
 
         ok_count = sum(1 for _, s, _ in results if s)
+        log_hint = ""
+        if ok_count < len(results):
+            failed = ", ".join(n for n, s, _ in results if not s)
+            log_hint = (f"\n\n失败: {failed}"
+                        f"\n\n详细日志:\n{env.install_log_path}\n"
+                        "（也可通过「更多操作 → 查看安装日志」随时查看）")
         QMessageBox.information(
             self, "安装完成",
             f"软件包安装完成\n成功: {ok_count}/{len(results)}\n"
             + ("全部安装成功！" if ok_count == len(results)
-               else "失败的软件包可在表格中选中后单独重装，或查看日志定位问题。")
+               else f"失败的软件包可在表格中选中后单独重装。{log_hint}")
         )
 
     def _retry_package(self, item=None):
@@ -862,15 +895,19 @@ class EnvSetupPage(QWidget):
         self._set_env_busy(True, "正在重装软件包")
 
         def task_fn():
-            results = []
-            for pkg_name in pkg_names:
-                # 内置包走标准安装；自定义包走通用安装
-                pkg = next((p for p in PACKAGES if p.name == pkg_name), None)
-                if pkg is not None:
-                    success, msg = env.install_package(pkg)
-                else:
-                    success, msg = env.install_custom_package(pkg_name)
-                results.append((pkg_name, success, msg))
+            env.begin_install_session(f"重装选中软件包: {', '.join(pkg_names)}")
+            try:
+                results = []
+                for pkg_name in pkg_names:
+                    # 内置包走标准安装；自定义包走通用安装
+                    pkg = next((p for p in PACKAGES if p.name == pkg_name), None)
+                    if pkg is not None:
+                        success, msg = env.install_package(pkg)
+                    else:
+                        success, msg = env.install_custom_package(pkg_name)
+                    results.append((pkg_name, success, msg))
+            finally:
+                env.end_install_session()
             self._retry_results = results
             ok = all(s for _, s, _ in results)
             return ok, f"成功 {sum(1 for _, s, _ in results if s)}/{len(results)}"
@@ -897,11 +934,17 @@ class EnvSetupPage(QWidget):
                     ver_item.setText(ver)
 
         ok_count = sum(1 for _, s, _ in results if s)
+        log_hint = ""
+        if ok_count < len(results):
+            failed = ", ".join(n for n, s, _ in results if not s)
+            log_hint = (f"\n\n失败: {failed}"
+                        f"\n\n详细日志:\n{env.install_log_path}\n"
+                        "（也可通过「更多操作 → 查看安装日志」随时查看）")
         QMessageBox.information(
             self, "重装完成",
             f"重装完成\n成功: {ok_count}/{len(results)}\n"
             + ("全部成功！" if ok_count == len(results)
-               else "失败的软件包可再次选中后重装，或在高级设置中查看日志。")
+               else f"失败的软件包可再次选中后重装。{log_hint}")
         )
 
     def _verify_packages(self):
@@ -1074,7 +1117,11 @@ class EnvSetupPage(QWidget):
         self._set_env_busy(True, f"正在安装 {spec}")
 
         def task_fn():
-            return env.install_custom_package(spec)
+            env.begin_install_session(f"自定义安装: {spec}")
+            try:
+                return env.install_custom_package(spec)
+            finally:
+                env.end_install_session()
 
         self._run_env_task(task_fn, lambda ok, msg: self._on_custom_install_done(ok, msg, base_name))
 
@@ -1102,7 +1149,97 @@ class EnvSetupPage(QWidget):
         if ok:
             QMessageBox.information(self, "安装完成", msg)
         else:
-            QMessageBox.warning(self, "安装失败", msg)
+            QMessageBox.warning(
+                self, "安装失败",
+                f"{msg}\n\n详细日志:\n{env.install_log_path}\n"
+                "（也可通过「更多操作 → 查看安装日志」随时查看）")
+
+    # ---- 安装日志查看 ----
+
+    def _open_install_log_dir(self):
+        """在文件管理器中打开安装日志文件夹"""
+        d = CondaEnvManager.get_install_log_dir()
+        QDesktopServices.openUrl(QUrl.fromLocalFile(d))
+
+    def _show_install_log(self):
+        """查看安装日志（下拉切换历史日志，支持安装进行中实时刷新）"""
+        logs = CondaEnvManager.list_install_logs()
+        if not logs:
+            QMessageBox.information(
+                self, "安装日志",
+                "暂无安装日志。\n\n安装软件包后会自动记录每个软件包的"
+                "完整安装输出到:\n"
+                + CondaEnvManager.get_install_log_dir())
+            return
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("安装日志")
+        dlg.resize(900, 600)
+        lay = QVBoxLayout(dlg)
+        lay.setContentsMargins(10, 10, 10, 10)
+        lay.setSpacing(8)
+
+        top = QHBoxLayout()
+        top.addWidget(QLabel("日志文件:"))
+        combo = QComboBox()
+        for p in logs:
+            ts = os.path.getmtime(p)
+            combo.addItem(
+                f"{os.path.basename(p)}  "
+                f"({datetime.fromtimestamp(ts).strftime('%Y-%m-%d %H:%M')})",
+                p)
+        combo.setCurrentIndex(0)  # 默认显示最新一份
+        top.addWidget(combo, 1)
+        refresh_btn = QPushButton("⟳ 刷新")
+        refresh_btn.setToolTip("重新读取日志内容（安装进行中可刷新查看最新输出）")
+        top.addWidget(refresh_btn)
+        lay.addLayout(top)
+
+        view = QTextEdit()
+        view.setReadOnly(True)
+        mono = QFont("Monospace")
+        mono.setStyleHint(QFont.Monospace)
+        mono.setPointSize(9)
+        view.setFont(mono)
+        view.setStyleSheet(
+            "QTextEdit { background: #1b1f23; color: #cfd8dc;"
+            " border: 1px solid #37474f; border-radius: 4px; }")
+        lay.addWidget(view, 1)
+
+        def load_log():
+            path = combo.currentData()
+            if not path or not os.path.isfile(path):
+                view.setPlainText("（日志文件不存在）")
+                return
+            try:
+                with open(path, "r", encoding="utf-8", errors="replace") as f:
+                    view.setPlainText(f.read())
+                view.moveCursor(QTextCursor.End)
+            except Exception as e:
+                view.setPlainText(f"无法读取日志: {e}")
+
+        def open_dir():
+            path = combo.currentData()
+            if path:
+                QDesktopServices.openUrl(
+                    QUrl.fromLocalFile(os.path.dirname(path)))
+
+        combo.currentIndexChanged.connect(lambda _: load_log())
+        refresh_btn.clicked.connect(load_log)
+        load_log()
+
+        btn_row = QHBoxLayout()
+        open_dir_btn = QPushButton("📂 打开所在文件夹")
+        open_dir_btn.clicked.connect(open_dir)
+        btn_row.addWidget(open_dir_btn)
+        btn_row.addStretch()
+        close_btn = QPushButton("关闭")
+        close_btn.clicked.connect(dlg.accept)
+        close_btn.setDefault(True)
+        btn_row.addWidget(close_btn)
+        lay.addLayout(btn_row)
+
+        dlg.exec_()
 
     def _open_system_terminal(self):
         """打开 UOS 系统终端，cd 到工作目录 + conda activate 进入分析环境"""

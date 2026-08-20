@@ -15,6 +15,7 @@ import shutil
 import urllib.request
 import stat
 import threading
+from datetime import datetime
 from typing import Tuple, List, Optional
 from dataclasses import dataclass, field
 
@@ -175,6 +176,9 @@ class CondaEnvManager:
         self._current_proc: Optional[subprocess.Popen] = None
         self._proc_lock = threading.Lock()
         self._cancelled = False
+        # ---- 安装日志 ----
+        self._install_log_fh = None
+        self._install_log_path = ""
 
     @property
     def is_cancelled(self) -> bool:
@@ -208,6 +212,90 @@ class CondaEnvManager:
                         proc.kill()
             except Exception:
                 pass
+
+    # ---- 安装日志（持久化到文件，便于排查安装失败） ----
+
+    @staticmethod
+    def get_install_log_dir() -> str:
+        """安装日志目录（与 conda 数据同级的 logs/install/）"""
+        d = os.path.join(get_app_data_dir(), "logs", "install")
+        os.makedirs(d, exist_ok=True)
+        return d
+
+    def begin_install_session(self, mode: str):
+        """开始一次安装会话：创建带时间戳的日志文件并写入头部"""
+        try:
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            self._install_log_path = os.path.join(
+                self.get_install_log_dir(), f"install_{ts}.log")
+            self._install_log_fh = open(
+                self._install_log_path, "w", encoding="utf-8")
+            self._log_write("=" * 64)
+            self._log_write("TVAS 软件包安装日志")
+            self._log_write(f"时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+            self._log_write(f"模式: {mode}")
+            self._log_write(f"环境: {self.env_name}")
+            self._log_write(f"Conda: {self._conda_exe}")
+            self._log_write("=" * 64)
+        except Exception:
+            self._install_log_fh = None
+            self._install_log_path = ""
+
+    def end_install_session(self):
+        """结束安装会话，关闭日志文件"""
+        if self._install_log_fh:
+            try:
+                self._log_write("=" * 64)
+                self._log_write(f"会话结束: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+                self._install_log_fh.close()
+            except Exception:
+                pass
+        self._install_log_fh = None
+
+    @property
+    def install_log_path(self) -> str:
+        """当前（或最近一次）安装会话的日志文件路径"""
+        return self._install_log_path
+
+    @staticmethod
+    def list_install_logs() -> List[str]:
+        """列出历史安装日志，新的在前"""
+        try:
+            d = CondaEnvManager.get_install_log_dir()
+            files = [os.path.join(d, f) for f in os.listdir(d)
+                     if f.endswith(".log")]
+            return sorted(files, key=os.path.getmtime, reverse=True)
+        except Exception:
+            return []
+
+    def _log_write(self, text: str):
+        """写入一行日志（安装会话未开启时静默忽略）"""
+        if self._install_log_fh:
+            try:
+                self._install_log_fh.write(text + "\n")
+            except Exception:
+                pass
+
+    def _log_pkg_result(self, label: str, cmd: List[str], rc: int,
+                        out: str, err: str, success: bool, brief: str):
+        """记录单个软件包的命令与完整输出"""
+        self._log_write("")
+        self._log_write("-" * 64)
+        self._log_write(f"[{label}]")
+        self._log_write(f"命令: {' '.join(cmd)}")
+        self._log_write(f"退出码: {rc}")
+        self._log_write(f"结果: {'✓ 成功' if success else '✗ 失败'}  {brief}")
+        self._log_write("-" * 64)
+        if (out or "").strip():
+            self._log_write("[stdout]")
+            self._log_write(out.rstrip())
+        if (err or "").strip():
+            self._log_write("[stderr]")
+            self._log_write(err.rstrip())
+        try:
+            self._install_log_fh.flush()
+        except Exception:
+            pass
 
     # ---- 统一命令执行 ----
 
@@ -541,17 +629,22 @@ class CondaEnvManager:
         if rc == 0:
             ver = self.get_package_version(pkg.name)
             ver_str = f" (v{ver})" if ver else ""
-            return True, f"✓ {pkg.name}{ver_str} 安装成功"
+            msg = f"✓ {pkg.name}{ver_str} 安装成功"
+            self._log_pkg_result(pkg.name, cmd, rc, out, err, True, msg)
+            return True, msg
         if "already installed" in (out + err).lower():
             ver = self.get_package_version(pkg.name)
             ver_str = f" (v{ver})" if ver else ""
-            return True, f"✓ {pkg.name}{ver_str} (已安装)"
+            msg = f"✓ {pkg.name}{ver_str} (已安装)"
+            self._log_pkg_result(pkg.name, cmd, rc, out, err, True, msg)
+            return True, msg
 
         detail = (err or out)[-300:]
         advice = self.analyze_error(err or out)
         msg = f"✗ {pkg.name}: {detail}"
         if advice:
             msg += f"\n\n{advice}"
+        self._log_pkg_result(pkg.name, cmd, rc, out, err, False, msg)
         return False, msg
 
     def install_custom_package(self, spec: str) -> Tuple[bool, str]:
@@ -576,22 +669,30 @@ class CondaEnvManager:
         if rc == 0:
             ver = self.get_package_version(base_name) if base_name else ""
             ver_str = f" (v{ver})" if ver else ""
-            return True, f"✓ {spec}{ver_str} 安装成功"
+            msg = f"✓ {spec}{ver_str} 安装成功"
+            self._log_pkg_result(spec, cmd, rc, out, err, True, msg)
+            return True, msg
         if "already installed" in (out + err).lower():
             ver = self.get_package_version(base_name) if base_name else ""
             ver_str = f" (v{ver})" if ver else ""
-            return True, f"✓ {spec}{ver_str} (已安装)"
+            msg = f"✓ {spec}{ver_str} (已安装)"
+            self._log_pkg_result(spec, cmd, rc, out, err, True, msg)
+            return True, msg
 
         detail = (err or out)[-500:]
         advice = self.analyze_error(err or out)
         msg = f"✗ {spec}: {detail}"
         if advice:
             msg += f"\n\n{advice}"
+        self._log_pkg_result(spec, cmd, rc, out, err, False, msg)
         return False, msg
 
     def install_all_packages(self, progress_callback=None) -> List[Tuple[str, bool, str]]:
         results = []
         for i, pkg in enumerate(PACKAGES):
+            self._log_write("")
+            self._log_write(f">>> [{i + 1}/{len(PACKAGES)}] {pkg.name} "
+                            f"({pkg.description or ''})")
             if progress_callback:
                 progress_callback(i + 1, len(PACKAGES), f"正在安装 {pkg.display_name}...")
             success, msg = self.install_package(pkg)
