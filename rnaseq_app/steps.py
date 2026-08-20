@@ -6,6 +6,7 @@
 """
 
 import os
+import re
 import sys
 from typing import Tuple, List, Dict, Optional, Callable
 from dataclasses import dataclass, field
@@ -375,6 +376,32 @@ def step_trinity_assemble(env: CondaEnvManager, ctx: AnalysisContext,
 
     os.makedirs(out_dir, exist_ok=True)
     ctx.trinity_dir = out_dir
+
+    # 快速预检查：Trinity 运行依赖 samtools (>=1.3)，缺失/过旧时立即失败，
+    # 避免做完耗时的输入校验后才在组装中途报错
+    log("  检查运行依赖 (samtools)...")
+    ok_st, st_out = env.run_in_env("samtools --version", timeout=120)
+    st_ver = ""
+    if ok_st:
+        m = re.search(r'samtools\s+(\d+(?:\.\d+)?)', st_out or "")
+        if m:
+            st_ver = m.group(1)
+    ver_ok = False
+    if st_ver:
+        try:
+            ver_ok = tuple(int(x) for x in st_ver.split(".")[:2]) >= (1, 3)
+        except ValueError:
+            ver_ok = False
+    if not ok_st or not ver_ok:
+        detail = f"当前版本 {st_ver}" if st_ver else "未安装"
+        result.status = StepStatus.FAILED
+        result.message = f"samtools 不可用（{detail}，Trinity 需要 ≥1.3）"
+        log(f"✗ Trinity 组装中止：samtools {detail}（Trinity 需要 ≥1.3）")
+        log("  请先补装/升级 samtools 后重试，任选其一：")
+        log("  ① 软件内：到「环境设置」页重新点击安装（V0.1.12 起清单已包含 samtools）")
+        log(f"  ② 终端执行: {getattr(env, '_conda_exe', 'conda')} install -n {env.env_name} -y -c bioconda -c conda-forge samtools")
+        return result
+    log(f"    ✓ samtools {st_ver}")
 
     # 智能选择输入源：根据上游实际运行情况选择 reads 来源
     # rcorrector > fastp > 原始fq
