@@ -160,7 +160,7 @@ def step_fastqc(env: CondaEnvManager, ctx: AnalysisContext,
         if ok:
             log(f"    ✓ {sample.replicate} 完成")
         else:
-            log(f"    ✗ {sample.replicate} 失败: {output[-200:]}")
+            log(f"    ✗ {sample.replicate} 失败: {output[-600:]}")
             failed_samples.append(sample.replicate)
 
     progress(100)
@@ -235,7 +235,7 @@ def step_fastp(env: CondaEnvManager, ctx: AnalysisContext,
         if ok:
             log(f"    ✓ {sample.replicate} 过滤完成")
         else:
-            log(f"    ✗ {sample.replicate} 失败: {output[-200:]}")
+            log(f"    ✗ {sample.replicate} 失败: {output[-600:]}")
             failed_samples.append(sample.replicate)
 
     progress(100)
@@ -340,7 +340,7 @@ def step_rcorrector(env: CondaEnvManager, ctx: AnalysisContext,
                 log(f"    ✗ {sample.replicate} 未生成输出文件: {r1_out}")
                 failed_samples.append(sample.replicate)
         else:
-            log(f"    ✗ {sample.replicate} 失败: {output[-200:]}")
+            log(f"    ✗ {sample.replicate} 失败: {output[-600:]}")
             failed_samples.append(sample.replicate)
 
     progress(100)
@@ -491,7 +491,13 @@ def step_trinity_assemble(env: CondaEnvManager, ctx: AnalysisContext,
         else:
             log("⚠ Trinity 似乎完成但未找到 Trinity.fasta，请检查输出目录")
     else:
-        log(f"✗ Trinity 组装失败:\n{output[-500:]}")
+        # 同时显示错误输出的头部和尾部（首个错误常在头部，最终报错在尾部）
+        err_text = output or ""
+        if len(err_text) > 2000:
+            err_show = err_text[:500] + "\n    ...(中间输出省略)...\n" + err_text[-1200:]
+        else:
+            err_show = err_text
+        log(f"✗ Trinity 组装失败:\n{err_show}")
         result.status = StepStatus.FAILED
         result.message = "Trinity 组装失败"
         return result
@@ -564,7 +570,7 @@ def step_longest_isoform(env: CondaEnvManager, ctx: AnalysisContext,
         seq_count = count_out.strip() if count_ok else "?"
         log(f"✓ 提取完成，共 {seq_count} 条序列")
     else:
-        log(f"✗ 提取失败: {output[-300:]}")
+        log(f"✗ 提取失败: {output[-600:]}")
 
     progress(100)
     result.status = StepStatus.SUCCESS
@@ -633,7 +639,7 @@ def step_cd_hit(env: CondaEnvManager, ctx: AnalysisContext,
         seq_count = count_out.strip() if count_ok else "?"
         log(f"✓ CD-HIT 完成，共 {seq_count} 条序列 (去冗余后)")
     else:
-        log(f"✗ CD-HIT 失败: {output[-300:]}")
+        log(f"✗ CD-HIT 失败: {output[-600:]}")
         result.status = StepStatus.FAILED
         result.message = "CD-HIT 去冗余失败"
         return result
@@ -759,7 +765,7 @@ def step_transdecoder_longorfs(env: CondaEnvManager, ctx: AnalysisContext,
         else:
             log("⚠ TransDecoder LongOrfs 完成但未找到预期输出文件")
     else:
-        log(f"✗ TransDecoder LongOrfs 失败:\n{output[-300:]}")
+        log(f"✗ TransDecoder LongOrfs 失败:\n{output[-600:]}")
 
     progress(100)
     result.status = StepStatus.SUCCESS
@@ -821,7 +827,7 @@ def step_transdecoder_predict(env: CondaEnvManager, ctx: AnalysisContext,
         log(f"  CDS: {ctx.transdecoder_cds}")
         log(f"  GFF3: {ctx.transdecoder_gff3}")
     else:
-        log(f"✗ TransDecoder Predict 失败:\n{output[-300:]}")
+        log(f"✗ TransDecoder Predict 失败:\n{output[-600:]}")
 
     progress(100)
     result.status = StepStatus.SUCCESS
@@ -935,7 +941,7 @@ def step_gffread(env: CondaEnvManager, ctx: AnalysisContext,
     if ok:
         log(f"✓ CDS 提取完成 → {cds_out}")
     else:
-        log(f"✗ CDS 提取失败: {output[-200:]}")
+        log(f"✗ CDS 提取失败: {output[-600:]}")
 
     # 提取 Protein
     cmd_pep = f"gffread {gff3} -g {genome_fa} -y {pep_out}"
@@ -950,7 +956,7 @@ def step_gffread(env: CondaEnvManager, ctx: AnalysisContext,
     if ok:
         log(f"✓ Protein 提取完成 → {pep_out}")
     else:
-        log(f"✗ Protein 提取失败: {output[-200:]}")
+        log(f"✗ Protein 提取失败: {output[-600:]}")
 
     progress(100)
     result.status = StepStatus.SUCCESS
