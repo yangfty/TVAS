@@ -823,6 +823,14 @@ class EnvSetupPage(QWidget):
         self._set_env_busy(True, "正在安装软件包")
 
         def task_fn():
+            # 环境缺失/残缺时先自动重建，否则所有安装都会
+            # 报 DirectoryNotACondaEnvironmentError 白跑一趟
+            ok_env, msg_env = env.ensure_env()
+            if not ok_env:
+                self._install_results = [
+                    (p.name, False, f"环境未就绪: {msg_env}") for p in PACKAGES
+                ]
+                return False, "环境创建失败，无法安装软件包"
             env.begin_install_session("安装全部软件包")
             try:
                 results = env.install_all_packages()
@@ -905,6 +913,13 @@ class EnvSetupPage(QWidget):
         self._set_env_busy(True, "正在重装软件包")
 
         def task_fn():
+            # 环境缺失/残缺时先自动重建（同 _install_packages）
+            ok_env, msg_env = env.ensure_env()
+            if not ok_env:
+                self._retry_results = [
+                    (n, False, f"环境未就绪: {msg_env}") for n in pkg_names
+                ]
+                return False, "环境创建失败，无法重装软件包"
             env.begin_install_session(f"重装选中软件包: {', '.join(pkg_names)}")
             try:
                 results = []
