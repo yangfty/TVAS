@@ -752,7 +752,8 @@ class EnvSetupPage(QWidget):
             self.conda_status_label.setStyleSheet(f"color: {COLORS['success']}; font-weight: bold;")
             self.create_env_btn.setEnabled(True)
             self.conda_path_edit.setText(env.conda_exe)
-            if env.env_exists():
+            state = env.env_state()
+            if state == "ok":
                 self.conda_status_label.setText(f"✓ {info}  |  环境 '{env.env_name}' 已存在")
                 self.create_env_btn.setText("重建环境")
                 self._env_ready = True
@@ -760,6 +761,16 @@ class EnvSetupPage(QWidget):
                 # 环境已存在时自动刷新表格版本/状态，
                 # 反映终端手动安装等环境真实变化（静默，不弹窗）
                 self._refresh_versions_from_env(silent=True)
+            elif state == "broken":
+                # 目录存在但缺 conda-meta：所有 conda install 都会失败
+                self.conda_status_label.setText(
+                    f"⚠ {info}  |  环境 '{env.env_name}' 残缺（创建中断的半成品），"
+                    "点击下方按钮自动清理并重建"
+                )
+                self.conda_status_label.setStyleSheet(f"color: {COLORS['warning']}; font-weight: bold;")
+                self.create_env_btn.setText("修复环境")
+                self._env_ready = False
+                self._refresh_env_buttons()
         elif info == "NEED_INSTALL":
             # 需要自动部署本地 Conda
             self.conda_path_edit.setText(os.path.join(get_local_conda_dir(), "bin", "conda"))
@@ -775,6 +786,33 @@ class EnvSetupPage(QWidget):
 
     def _create_env(self):
         env = self.get_env_manager()
+
+        # 重建确认：环境有效时点击「重建环境」= 删除全部已装软件包再重创，
+        # 属破坏性操作，必须先确认（此前该按钮实际只提示"已存在"而不重建，
+        # 导致用户以为重建了、实际环境未变）
+        if env.env_state() == "ok":
+            reply = QMessageBox.question(
+                self, "确认重建环境",
+                f"环境 '{env.env_name}' 已存在且有效。\n\n"
+                "重建将删除其中已安装的全部软件包（包括 Trinity、kallisto 等），"
+                "之后需要重新下载安装。\n\n"
+                "• 环境能正常使用 → 点「否」，直接去安装/运行即可\n"
+                "• 环境反复出问题想彻底重来 → 点「是」",
+                QMessageBox.Yes | QMessageBox.No
+            )
+            if reply != QMessageBox.Yes:
+                return
+            self.conda_status_label.setText("正在删除旧环境（文件较多，可能需要一两分钟）...")
+            self.conda_status_label.setStyleSheet(f"color: {COLORS['running']};")
+            QApplication.processEvents()
+            ok_rm, msg_rm = env.remove_env()
+            if not ok_rm and env.env_state() == "ok":
+                QMessageBox.warning(self, "删除失败", f"无法删除旧环境:\n{msg_rm}")
+                return
+            # 表格回到未安装状态（环境已清空）
+            self._reset_pkg_table()
+        # broken 状态无需确认：残缺目录本就不可用，create_env 会自动清理
+
         self.create_env_btn.setEnabled(False)
 
         # 如果 conda 不可用，先自动部署
@@ -806,14 +844,28 @@ class EnvSetupPage(QWidget):
 
         ok, msg = env.create_env()
         if ok:
-            self.conda_status_label.setText(f"✓ 环境 '{env.env_name}' 创建成功")
+            self.conda_status_label.setText(f"✓ {msg}")
             self.conda_status_label.setStyleSheet(f"color: {COLORS['success']}; font-weight: bold;")
             self._env_ready = True
             self._refresh_env_buttons()
+            self.create_env_btn.setText("重建环境")
+            # 全新环境：表格回到未安装状态
+            self._reset_pkg_table()
         else:
-            self.conda_status_label.setText(f"✗ 创建失败: {msg[:100]}")
+            self.conda_status_label.setText(f"✗ 创建失败: {msg[:150]}")
             self.conda_status_label.setStyleSheet(f"color: {COLORS['error']};")
         self.create_env_btn.setEnabled(True)
+
+    def _reset_pkg_table(self):
+        """表格回到初始状态（环境重建/删除后调用，清掉旧版本和状态）"""
+        for row in range(self.pkg_table.rowCount()):
+            ver_item = self.pkg_table.item(row, 1)
+            if ver_item:
+                ver_item.setText("")
+            status_item = self.pkg_table.item(row, 3)
+            if status_item:
+                status_item.setText("未安装")
+                status_item.setForeground(QColor("#7f8c8d"))
 
     def _install_packages(self):
         env = self.get_env_manager()
@@ -831,6 +883,14 @@ class EnvSetupPage(QWidget):
                     (p.name, False, f"环境未就绪: {msg_env}") for p in PACKAGES
                 ]
                 return False, "环境创建失败，无法安装软件包"
+            # 磁盘空间预检：空间不足时安装中途失败会留下损坏的环境
+            free_gb = env.free_disk_gb()
+            if 0 <= free_gb < 2:
+                self._install_results = [
+                    (p.name, False, f"磁盘空间不足（仅 {free_gb:.1f} GB）") for p in PACKAGES
+                ]
+                return False, (f"磁盘剩余空间仅 {free_gb:.1f} GB，"
+                               "完整软件包约需 5 GB。请清理磁盘（可用 conda clean -a 清缓存）后重试")
             env.begin_install_session("安装全部软件包")
             try:
                 results = env.install_all_packages()
@@ -1111,14 +1171,7 @@ class EnvSetupPage(QWidget):
             return
 
         # 重置表格：清空版本和状态
-        for row in range(self.pkg_table.rowCount()):
-            ver_item = self.pkg_table.item(row, 1)
-            if ver_item:
-                ver_item.setText("")
-            status_item = self.pkg_table.item(row, 3)
-            if status_item:
-                status_item.setText("未安装")
-                status_item.setForeground(QColor("#7f8c8d"))
+        self._reset_pkg_table()
 
         # 环境已删除，恢复初始按钮状态
         self._env_ready = False
