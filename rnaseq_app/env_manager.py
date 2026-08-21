@@ -733,7 +733,13 @@ class CondaEnvManager:
     def install_package(self, pkg: PackageSpec) -> Tuple[bool, str]:
         cmd = [self._conda_exe, "install", "-n", self.env_name, "-y"]
         cmd.extend(["-c", pkg.channel])
-        for ch in pkg.extra_channels:
+        # bioconda 官方建议所有安装都同时挂 conda-forge：
+        # 部分 C/C++ 依赖（hdf5、ncurses 等）新版本只在 conda-forge 存在，
+        # 缺频道会报 UnsatisfiableError（kallisto/hdf5 即此问题）
+        channels = list(pkg.extra_channels)
+        if "conda-forge" not in channels:
+            channels.append("conda-forge")
+        for ch in channels:
             cmd.extend(["-c", ch])
         pkg_spec = f"{pkg.name}={pkg.version}" if pkg.version else pkg.name
         cmd.append(pkg_spec)
