@@ -535,12 +535,14 @@ class CondaEnvManager:
     def _broken_env_dir(self) -> str:
         """检测残缺环境目录：目录存在但缺 conda-meta（有效环境的标志）。
 
-        多为环境创建中途超时/取消留下的半成品，或删除不彻底的遗留。
+        多为环境创建中途超时/取消/磁盘满留下的半成品，或删除不彻底的遗留。
         返回残缺目录路径；无残缺返回空串。
         """
         try:
             # conda 可执行文件位于 <conda_root>/bin/conda → envs 在 <conda_root>/envs
-            conda_root = os.path.dirname(os.path.dirname(os.path.abspath(self._conda_exe)))
+            # shutil.which 解析 PATH 上的 conda / 符号链接，避免 abspath 相对路径误判
+            exe = shutil.which(self._conda_exe) or os.path.abspath(self._conda_exe)
+            conda_root = os.path.dirname(os.path.dirname(exe))
             d = os.path.join(conda_root, "envs", self.env_name)
             if os.path.isdir(d) and not os.path.isdir(os.path.join(d, "conda-meta")):
                 return d
@@ -548,22 +550,51 @@ class CondaEnvManager:
             pass
         return ""
 
+    def env_state(self) -> str:
+        """环境状态: 'ok' 有效 | 'broken' 残缺(目录在但缺元数据) | 'missing' 不存在"""
+        if self._broken_env_dir():
+            return "broken"
+        return "ok" if self.env_exists() else "missing"
+
+    def free_disk_gb(self) -> float:
+        """conda 所在磁盘剩余空间（GB）；无法检测返回 -1"""
+        try:
+            exe = shutil.which(self._conda_exe) or os.path.abspath(self._conda_exe)
+            conda_root = os.path.dirname(os.path.dirname(exe))
+            for p in (conda_root, os.path.dirname(conda_root), os.path.expanduser("~")):
+                if os.path.isdir(p):
+                    return shutil.disk_usage(p).free / 2**30
+        except Exception:
+            pass
+        return -1.0
+
     def create_env(self, prefix: Optional[str] = None) -> Tuple[bool, str]:
         """
         创建conda虚拟环境。
         如果指定 prefix，环境建在指定目录（自包含隔离）。
         """
+        # 残缺环境目录必须最先清理（放在 env_exists 判断之前）：
+        # 缺 conda-meta 的目录必然不是有效环境，但 conda create 会因
+        # "prefix already exists" 拒绝创建、install 会报
+        # DirectoryNotACondaEnvironmentError，形成死锁。
+        cleaned = ""
+        if prefix is None:
+            broken = self._broken_env_dir()
+            if broken:
+                shutil.rmtree(broken, ignore_errors=True)
+                cleaned = "（已自动清理上次创建中断留下的残缺目录）"
+
         if self.env_exists():
             return True, f"环境 '{self.env_name}' 已存在"
 
-        # 残缺环境目录必须先清理，否则 conda create 报
-        # DirectoryNotACondaEnvironmentError（目录存在但不是有效环境）。
-        # 缺 conda-meta 的目录必然不是有效环境，可安全删除。
-        cleaned = ""
-        broken = self._broken_env_dir()
-        if broken:
-            shutil.rmtree(broken, ignore_errors=True)
-            cleaned = "（已自动清理上次创建中断留下的残缺目录）"
+        # 磁盘空间预检：空间不足是"安装中断→环境残缺"的常见根因
+        free_gb = self.free_disk_gb()
+        if 0 <= free_gb < 2:
+            return False, (
+                f"磁盘剩余空间不足（仅 {free_gb:.1f} GB，完整环境约需 5 GB）。\n"
+                "请清理磁盘后重试，可先清理 conda 下载缓存:\n"
+                f"  {self._conda_exe} clean -a -y"
+            )
 
         cmd = [self._conda_exe, "create", "-n", self.env_name, "-y", "python=3.8"]
         if prefix:
@@ -581,8 +612,9 @@ class CondaEnvManager:
             return False, str(e)
 
     def ensure_env(self) -> Tuple[bool, str]:
-        """确保分析环境存在且可用；缺失或残缺时自动（重建）。"""
-        if self.env_exists():
+        """确保分析环境存在且可用；缺失或残缺时自动重建（残缺目录会被清理）。"""
+        state = self.env_state()
+        if state == "ok":
             return True, f"环境 '{self.env_name}' 就绪"
         return self.create_env()
 
