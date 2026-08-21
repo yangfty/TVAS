@@ -532,6 +532,22 @@ class CondaEnvManager:
             pass
         return None
 
+    def _broken_env_dir(self) -> str:
+        """检测残缺环境目录：目录存在但缺 conda-meta（有效环境的标志）。
+
+        多为环境创建中途超时/取消留下的半成品，或删除不彻底的遗留。
+        返回残缺目录路径；无残缺返回空串。
+        """
+        try:
+            # conda 可执行文件位于 <conda_root>/bin/conda → envs 在 <conda_root>/envs
+            conda_root = os.path.dirname(os.path.dirname(os.path.abspath(self._conda_exe)))
+            d = os.path.join(conda_root, "envs", self.env_name)
+            if os.path.isdir(d) and not os.path.isdir(os.path.join(d, "conda-meta")):
+                return d
+        except Exception:
+            pass
+        return ""
+
     def create_env(self, prefix: Optional[str] = None) -> Tuple[bool, str]:
         """
         创建conda虚拟环境。
@@ -540,19 +556,35 @@ class CondaEnvManager:
         if self.env_exists():
             return True, f"环境 '{self.env_name}' 已存在"
 
+        # 残缺环境目录必须先清理，否则 conda create 报
+        # DirectoryNotACondaEnvironmentError（目录存在但不是有效环境）。
+        # 缺 conda-meta 的目录必然不是有效环境，可安全删除。
+        cleaned = ""
+        broken = self._broken_env_dir()
+        if broken:
+            shutil.rmtree(broken, ignore_errors=True)
+            cleaned = "（已自动清理上次创建中断留下的残缺目录）"
+
         cmd = [self._conda_exe, "create", "-n", self.env_name, "-y", "python=3.8"]
         if prefix:
             cmd = [self._conda_exe, "create", "-p", prefix, "-y", "python=3.8"]
 
         try:
-            rc, out, err = self._exec(cmd, 300)
+            # 慢网络下 python 包下载可能较久，预留 15 分钟
+            rc, out, err = self._exec(cmd, 900)
             if rc == 0:
-                return True, f"环境 '{self.env_name}' 创建成功"
+                return True, f"环境 '{self.env_name}' 创建成功{cleaned}"
             return False, (err or out)[-500:]
         except subprocess.TimeoutExpired:
-            return False, "创建环境超时（超过5分钟）"
+            return False, "创建环境超时（超过15分钟）"
         except Exception as e:
             return False, str(e)
+
+    def ensure_env(self) -> Tuple[bool, str]:
+        """确保分析环境存在且可用；缺失或残缺时自动（重建）。"""
+        if self.env_exists():
+            return True, f"环境 '{self.env_name}' 就绪"
+        return self.create_env()
 
     def get_package_version(self, pkg_name: str) -> str:
         """查询环境中某软件包的实际安装版本（未安装返回空）"""
@@ -643,6 +675,12 @@ class CondaEnvManager:
                 "建议: ① 去掉版本号安装最新版（旧版可能与已装包冲突）\n"
                 "     ② 或新建环境后重装: 环境设置页删除环境再创建\n"
                 "     ③ 或清理缓存后重试: conda clean -i -a"
+            )
+        if "not a conda environment" in err or "directorynotacondaenvironment" in err:
+            return (
+                "环境目录残缺（缺少 conda-meta 元数据），多为创建中途被打断所致。\n"
+                "建议: 在「环境设置」页点击「创建环境」自动清理残缺目录并重建，"
+                "重建后再安装软件包。"
             )
         if "packagesnotfound" in err:
             return (
