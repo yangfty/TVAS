@@ -86,6 +86,7 @@ class PackageSpec:
     verify_cmd: str = ""
     required: bool = True                # 是否必需（de novo 流程必备）
     description: str = ""                # 用途说明
+    install_timeout: int = 1800          # 安装超时（秒），大包需更长
 
     @property
     def display_name(self) -> str:
@@ -113,6 +114,7 @@ PACKAGES = [
         extra_channels=["conda-forge"],
         verify_cmd="Trinity --version",
         required=True, description="de novo 转录本组装",
+        install_timeout=3600,             # 超大包（数百 MB），慢网络下需更久
     ),
     PackageSpec(
         name="jellyfish", version="2.2",
@@ -137,6 +139,7 @@ PACKAGES = [
     ),
     PackageSpec(
         name="kallisto", version="0.51",
+        extra_channels=["conda-forge"],   # 依赖的 hdf5 >=1.14.3 仅在 conda-forge
         verify_cmd="kallisto version",
         required=True, description="转录本定量",
     ),
@@ -628,11 +631,17 @@ class CondaEnvManager:
         """分析 conda 错误信息，返回中文排查建议（无匹配返回空）"""
         err = err_text.lower()
         if "unsatisfiableerror" in err or "found conflicts" in err or "incompatible" in err:
+            # 依赖缺 channel 的典型特征: "does not exist (perhaps a missing channel)"
+            if "missing channel" in err or "not installable" in err:
+                return (
+                    "检测到依赖冲突: 所需的依赖包在当前 channel 中不存在。\n"
+                    "建议: 附加 conda-forge 频道重试（bioconda 的部分依赖仅在 conda-forge）:\n"
+                    "     conda install -n 环境 -c bioconda -c conda-forge <包名>"
+                )
             return (
                 "检测到依赖冲突 (UnsatisfiableError)。\n"
-                "建议: ① 尝试安装新版, 如 trinity=2.15: "
-                "conda install -c bioconda -c conda-forge trinity=2.15\n"
-                "     ② 或用更快的 mamba 求解器: conda install -n 环境 mamba\n"
+                "建议: ① 去掉版本号安装最新版（旧版可能与已装包冲突）\n"
+                "     ② 或新建环境后重装: 环境设置页删除环境再创建\n"
                 "     ③ 或清理缓存后重试: conda clean -i -a"
             )
         if "packagesnotfound" in err:
@@ -659,7 +668,7 @@ class CondaEnvManager:
         pkg_spec = f"{pkg.name}={pkg.version}" if pkg.version else pkg.name
         cmd.append(pkg_spec)
 
-        rc, out, err = self._exec(cmd, 600)
+        rc, out, err = self._exec(cmd, pkg.install_timeout)
 
         if rc == 0:
             ver = self.get_package_version(pkg.name)
@@ -699,7 +708,7 @@ class CondaEnvManager:
         cmd = [self._conda_exe, "install", "-n", self.env_name, "-y",
                "-c", "bioconda", "-c", "conda-forge", spec]
 
-        rc, out, err = self._exec(cmd, 600)
+        rc, out, err = self._exec(cmd, 1800)
 
         if rc == 0:
             ver = self.get_package_version(base_name) if base_name else ""
