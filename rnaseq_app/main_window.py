@@ -595,7 +595,19 @@ class EnvSetupPage(QWidget):
         self.pkg_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.pkg_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.pkg_table.setSelectionMode(QAbstractItemView.ExtendedSelection)
-        self.pkg_table.verticalHeader().setVisible(False)
+        # 行号列（序号）：自定义安装的包也会自动续号
+        vh = self.pkg_table.verticalHeader()
+        vh.setVisible(True)
+        vh.setDefaultSectionSize(30)
+        vh.setFixedWidth(36)
+        vh.setDefaultAlignment(Qt.AlignCenter)
+        vh.setStyleSheet(
+            "QHeaderView::section {"
+            "  background: #f5f6fa; color: #7f8c8d;"
+            "  border: none; border-right: 1px solid #e0e0e0;"
+            "  font-size: 12px; font-weight: bold;"
+            "}"
+        )
         self.pkg_table.setAlternatingRowColors(True)
         self.pkg_table.setMinimumHeight(360)
         self.pkg_table.setToolTip("选中一行可单独重装；双击行也触发重装")
