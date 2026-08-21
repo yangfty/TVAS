@@ -757,6 +757,9 @@ class EnvSetupPage(QWidget):
                 self.create_env_btn.setText("重建环境")
                 self._env_ready = True
                 self._refresh_env_buttons()
+                # 环境已存在时自动刷新表格版本/状态，
+                # 反映终端手动安装等环境真实变化（静默，不弹窗）
+                self._refresh_versions_from_env(silent=True)
         elif info == "NEED_INSTALL":
             # 需要自动部署本地 Conda
             self.conda_path_edit.setText(os.path.join(get_local_conda_dir(), "bin", "conda"))
@@ -834,32 +837,36 @@ class EnvSetupPage(QWidget):
     def _on_install_done(self, ok, msg):
         env = self.get_env_manager()
         results = self._install_results
-        versions = env.get_versions_bulk() if any(s for _, s, _ in results) else {}
+        versions = env.get_versions_bulk()
         for i, (name, success, _) in enumerate(results):
             if i >= len(PACKAGES):
                 continue
             status_item = self.pkg_table.item(i, 3)
-            status_item.setText("✓ 已安装" if success else "✗ 失败")
-            status_item.setForeground(QColor(COLORS["success"] if success else COLORS["error"]))
-            if success:
-                ver = versions.get(name.lower(), "")
-                if not ver:
-                    ver = env.get_package_version(name)
-                if ver:
-                    self.pkg_table.item(i, 1).setText(ver)
+            # 失败也要查实际版本：超时/报错的安装可能已实际完成
+            # （或用户事后在终端手动补装），以环境真实状态为准
+            ver = versions.get(name.lower(), "") or env.get_package_version(name)
+            installed = success or bool(ver)
+            status_item.setText("✓ 已安装" if installed else "✗ 失败")
+            status_item.setForeground(QColor(COLORS["success"] if installed else COLORS["error"]))
+            if ver:
+                self.pkg_table.item(i, 1).setText(ver)
 
-        ok_count = sum(1 for _, s, _ in results if s)
+        ok_count = sum(1 for i in range(min(len(results), len(PACKAGES)))
+                       if self.pkg_table.item(i, 3).text() == "✓ 已安装")
         log_hint = ""
         if ok_count < len(results):
-            failed = ", ".join(n for n, s, _ in results if not s)
+            failed = ", ".join(
+                n for i, (n, s, _) in enumerate(results)
+                if i < len(PACKAGES) and self.pkg_table.item(i, 3).text() != "✓ 已安装"
+            )
             log_hint = (f"\n\n失败: {failed}"
                         f"\n\n详细日志:\n{env.install_log_path}\n"
                         "（也可通过「更多操作 → 查看安装日志」随时查看）")
         QMessageBox.information(
             self, "安装完成",
-            f"软件包安装完成\n成功: {ok_count}/{len(results)}\n"
-            + ("全部安装成功！" if ok_count == len(results)
-               else f"失败的软件包可在表格中选中后单独重装。{log_hint}")
+            f"软件包安装完成\n已安装: {ok_count}/{len(results)}\n"
+            + ("全部就绪！" if ok_count == len(results)
+               else f"未装上的软件包可在表格中选中后单独重装。{log_hint}")
         )
 
     def _retry_package(self, item=None):
@@ -920,23 +927,23 @@ class EnvSetupPage(QWidget):
     def _on_retry_done(self, ok, msg):
         env = self.get_env_manager()
         results = self._retry_results
-        versions = env.get_versions_bulk() if any(s for _, s, _ in results) else {}
+        versions = env.get_versions_bulk()
         for pkg_name, success, _ in results:
             row = self._find_pkg_row(pkg_name)
             if row < 0:
                 continue
+            # 失败也要查实际版本：以环境真实状态为准（详见 _on_install_done）
+            ver = versions.get(pkg_name.lower(), "") or env.get_package_version(pkg_name)
+            installed = success or bool(ver)
             status_item = self.pkg_table.item(row, 3)
             if status_item:
-                status_item.setText("✓ 已安装" if success else "✗ 失败")
+                status_item.setText("✓ 已安装" if installed else "✗ 失败")
                 status_item.setForeground(
-                    QColor(COLORS["success"] if success else COLORS["error"])
+                    QColor(COLORS["success"] if installed else COLORS["error"])
                 )
-            if success:
-                ver = versions.get(pkg_name.lower(), "")
-                if not ver:
-                    ver = env.get_package_version(pkg_name)
+            if ver:
                 ver_item = self.pkg_table.item(row, 1)
-                if ver_item and ver:
+                if ver_item:
                     ver_item.setText(ver)
 
         ok_count = sum(1 for _, s, _ in results if s)
@@ -1276,7 +1283,7 @@ class EnvSetupPage(QWidget):
                 + (f"，工作目录: {work_dir}" if work_dir else "")
             )
 
-    def _refresh_versions_from_env(self):
+    def _refresh_versions_from_env(self, silent: bool = False):
         """从环境中读取所有已安装包的版本，刷新表格（后台执行，不卡界面）"""
         env = self.get_env_manager()
         # 先在主线程收集包名（后台线程不能访问 GUI 控件）
@@ -1309,11 +1316,15 @@ class EnvSetupPage(QWidget):
                         ver_item = self.pkg_table.item(row, 1)
                         if ver_item:
                             ver_item.setText(ver)
+                        # 只要环境里查到版本就标记已安装——
+                        # 之前显示"✗ 失败"的包（超时/报错后实际装上或手动补装）
+                        # 也能借此修正
                         status_item = self.pkg_table.item(row, 3)
-                        if status_item and status_item.text() in ("未安装", "等待安装..."):
+                        if status_item and status_item.text() != "✓ 已安装":
                             status_item.setText("✓ 已安装")
                             status_item.setForeground(QColor(COLORS["success"]))
-            QMessageBox.information(self, "刷新完成", "已安装版本刷新完毕")
+            if not silent:
+                QMessageBox.information(self, "刷新完成", "已安装版本刷新完毕")
 
         self._run_env_task(task_fn, on_done)
 
