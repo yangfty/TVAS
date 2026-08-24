@@ -36,8 +36,12 @@ def main():
     app.setStyle("Fusion")
 
     # 加载配置
+    # 注意: 配置必须放在用户数据目录。PyInstaller --onefile 打包后
+    # app_dir 是每次运行都不同的临时解压目录（/tmp/_MEIxxx），退出即销毁，
+    # 配置放那里永远存不下来——导致每次打开软件都要重新检测/创建环境
     from rnaseq_app.config import ConfigManager
-    config_file = os.path.join(app_dir, "rnaseq_config.json")
+    from rnaseq_app.env_manager import get_app_data_dir
+    config_file = os.path.join(get_app_data_dir(), "config.json")
     config = ConfigManager(config_file)
 
     # 创建主窗口
