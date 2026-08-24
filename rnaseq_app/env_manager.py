@@ -962,14 +962,15 @@ fi
             self._log_write(f"    [bioc] {note}")
 
         # 2) dry-run 解析依赖中的 bioconductor 数据包
-        try:
-            cmd = [self._conda_exe, "install", "-n", self.env_name, "--dry-run",
-                   "--json", "-q", "-c", "bioconda", "-c", "conda-forge", spec]
-            rc, out, _ = self._exec(cmd, 600)
-            plan = json.loads(out)
-            links = (plan.get("actions") or {}).get("LINK", [])
-        except Exception as e:
-            self._log_write(f"    [bioc] dry-run 解析失败: {e}，跳过数据预下载")
+        #    ⚠ 不同版本 conda 的 --json 输出格式不同（v0.1.26 只认字符串
+        #    格式导致预下载静默失效，见 20260824 报错日志2）：
+        #    - 经典版: LINK 是字符串 "channel::name-ver-build"
+        #    - 新版(reporter 后端): LINK 是字典 {"name":..., "version":...}
+        #    - 出错时: 输出 {"error":...} 无 actions 键 → LINK 为空
+        #    JSON 不可用时回退解析人类可读输出（"::name-ver-build" 列
+        #    格式跨版本稳定，与安装日志 stdout 段的包计划表相同）
+        pkg_list = self._dry_run_package_names(spec)
+        if pkg_list is None:
             return
 
         # 3) 索引: key 形如 "go.db-3.22.0"
@@ -979,12 +980,10 @@ fi
         except Exception:
             bioc_index = {}
 
-        for link in links:
-            s = str(link).split("::")[-1]  # 兼容 "channel::name-ver-build"
-            if not s.startswith("bioconductor-"):
+        matched = 0
+        for name, ver in pkg_list:
+            if not name.startswith("bioconductor-"):
                 continue
-            body, _, _build = s.rpartition("-")
-            name, _, ver = body.rpartition("-")
             key = f"{name[len('bioconductor-'):]}-{ver}"
             meta = bioc_index.get(key)
             if not meta:
@@ -994,6 +993,7 @@ fi
             staging = os.path.join(env_dir, "share", key)
             tar = os.path.join(staging, fn)
             os.makedirs(staging, exist_ok=True)
+            matched += 1
 
             # md5 已正确 → 已缓存, 跳过
             if os.path.isfile(tar) and self._md5_of(tar) == md5:
@@ -1017,6 +1017,99 @@ fi
                 self._log_write(f"    [bioc] ✓ {key} 预下载完成")
             else:
                 self._log_write(f"    [bioc] ✗ {key} 预下载失败（将回退原下载流程）")
+
+        if matched == 0:
+            # 诊断: 解析成功但一个数据包都没匹配上时明示出来
+            # （此前静默跳过，日志无从判断预下载为何没执行）
+            self._log_write(
+                f"    [bioc] 依赖中未匹配到 bioconductor 数据包"
+                f"（共解析 {len(pkg_list)} 个包, 索引 {len(bioc_index)} 条），无需预下载")
+
+    def _dry_run_package_names(self, spec: str) -> Optional[List[Tuple[str, str]]]:
+        """dry-run 解析安装计划，返回 [(包名, 版本), ...]。
+
+        优先 --json 结构化输出；不可用时回退解析人类可读输出。
+        返回 None 表示两条路都失败（调用方跳过预下载）。
+        """
+        # 尝试 1: --json 输出
+        try:
+            cmd = [self._conda_exe, "install", "-n", self.env_name, "--dry-run",
+                   "--json", "-q", "-c", "bioconda", "-c", "conda-forge", spec]
+            rc, out, _ = self._exec(cmd, 600)
+            plan = None
+            try:
+                plan = json.loads(out)
+            except ValueError:
+                # 输出前混入了非 JSON 内容时截取 JSON 主体
+                i, j = out.find("{"), out.rfind("}")
+                if i >= 0 and j > i:
+                    try:
+                        plan = json.loads(out[i:j + 1])
+                    except ValueError:
+                        plan = None
+            if isinstance(plan, dict):
+                links = (plan.get("actions") or {}).get("LINK") or []
+                if links:
+                    names = []
+                    for link in links:
+                        name, ver = self._pkg_name_ver_from_link(link)
+                        if name:
+                            names.append((name, ver))
+                    self._log_write(f"    [bioc] dry-run(JSON): 解析到 {len(names)} 个包")
+                    return names
+                # links 为空: 多为错误 JSON（无 actions 键）
+                self._log_write(
+                    f"    [bioc] dry-run(JSON) 未含安装计划(rc={rc}, "
+                    f"键={sorted(plan.keys())})，改用文本解析")
+            else:
+                self._log_write(f"    [bioc] dry-run(JSON) 解析失败(rc={rc})，改用文本解析")
+        except Exception as e:
+            self._log_write(f"    [bioc] dry-run(JSON) 执行异常: {e}，改用文本解析")
+
+        # 尝试 2: 人类可读输出（"::name-version-build" 列格式跨版本稳定）
+        try:
+            cmd = [self._conda_exe, "install", "-n", self.env_name, "--dry-run",
+                   "-q", "-c", "bioconda", "-c", "conda-forge", spec]
+            rc, out, _ = self._exec(cmd, 600)
+            dists = re.findall(r"::([A-Za-z0-9_.+~!-]+)", out or "")
+            names = []
+            for d in dists:
+                body, _, _build = d.rpartition("-")
+                name, _, ver = body.rpartition("-")
+                if name:
+                    names.append((name, ver))
+            if names:
+                self._log_write(f"    [bioc] dry-run(文本): 解析到 {len(names)} 个包")
+                return names
+            self._log_write("    [bioc] dry-run 文本解析亦未取得包列表，跳过数据预下载")
+            return None
+        except Exception as e:
+            self._log_write(f"    [bioc] dry-run(文本) 执行异常: {e}，跳过数据预下载")
+            return None
+
+    @staticmethod
+    def _pkg_name_ver_from_link(link) -> Tuple[str, str]:
+        """从 LINK 条目提取 (包名, 版本)。
+
+        兼容两种格式:
+        - 字符串: "channel::name-version-build"（经典 conda）
+        - 字典: {"name":..., "version":...}（新版 reporter 后端 / micromamba）
+        """
+        if isinstance(link, dict):
+            name = str(link.get("name") or "")
+            ver = str(link.get("version") or "")
+            if name and ver:
+                return name, ver
+            dist = str(link.get("dist_name") or "")
+            if dist:
+                body, _, _ = dist.rpartition("-")
+                name, _, ver = body.rpartition("-")
+                return name, ver
+            return "", ""
+        s = str(link).split("::")[-1]
+        body, _, _build = s.rpartition("-")
+        name, _, ver = body.rpartition("-")
+        return name, ver
 
     @staticmethod
     def _md5_of(path: str) -> str:
