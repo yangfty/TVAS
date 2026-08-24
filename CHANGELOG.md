@@ -6,6 +6,20 @@
 
 ---
 
+## [0.1.26] - 2026-08-24
+
+### 修复
+- **Trinity 安装失败（bioconductor 数据包下载断流）**：
+  - 根因：trinity 依赖的 `bioconductor-go.db` 等**数据包**安装时不走 conda 镜像，而是由 post-link 脚本从 bioconductor.org 现场下载注释数据（GO.db 约 24MB）。国内直连仅 16~50KB/s 且中途断流（curl error 18）；且原脚本 `set -e` 使第一个下载失败即整个安装中止，配置里的备用镜像永远轮不到
+  - 修复一：安装 trinity 前，自动用国内可达速度更快的镜像（depot.galaxyproject.org，实测 ~440KB/s，比 bioconductor.org 快 8~30 倍）**断点续传预下载**全部所需数据包到本地（md5 校验）
+  - 修复二：自动给 `installBiocDataPackage.sh` 打补丁（TVAS_BIOC_PATCH_V1）：命中预下载缓存则直接安装，完全跳过慢速下载环节；补丁幂等、自动备份原脚本，conda 重装依赖包后自动重打
+  - 依赖清单通过 `conda install --dry-run --json` 动态解析，自动覆盖 trinity 依赖链中所有 bioconductor 数据包（不止 go.db），自定义安装 trinity / bioconductor-* 系列同样受益
+  - 下载器新增断点续传能力（Range 请求 + 断流后接着已下载部分继续），弱网大文件下载不再从零开始
+  - 错误提示增强：新增 post-link 失败、conda 错误渲染崩溃（`ValueError: unsupported format character`，新版 conda 已知问题会掩盖真实报错）的中文排查指引
+  - 已实测验证：完整预下载 GO.db_3.22.0（24MB）并 md5 校验通过，与官方索引完全一致
+
+---
+
 ## [0.1.25] - 2026-08-24
 
 ### 修复
