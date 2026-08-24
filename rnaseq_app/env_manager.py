@@ -778,7 +778,7 @@ class CondaEnvManager:
                 or "proxy" in err or "ssl" in err or "condahttperror" in err):
             return (
                 "网络连接问题（bioconda 官方源在国外，直连易超时/卡死）。\n"
-                "本程序已自动配置清华 TUNA 国内镜像，通常直接重试即可成功。\n"
+                "本程序已自动配置浙大 ZJU 国内镜像，通常直接重试即可成功。\n"
                 "若仍反复失败: ① 更换网络环境（如手机热点）后重试\n"
                 "             ② 或稍后再试（镜像站高峰期偶发限流）"
             )
