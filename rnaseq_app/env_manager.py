@@ -65,7 +65,7 @@ def get_local_envs_dir() -> str:
 # CondaToSNonInteractiveError，因此注入环境变量自动接受。
 
 def _ensure_condarc() -> str:
-    """生成应用专属 condarc（清华 TUNA 国内镜像），返回文件路径。
+    """生成应用专属 condarc（浙大 ZJU 国内镜像），返回文件路径。
 
     bioconda/conda-forge 官方服务器在国外，国内直连经常下载中途
     卡死或报 HTTP 超时。通过 CONDARC 环境变量让本程序启动的所有
@@ -75,16 +75,21 @@ def _ensure_condarc() -> str:
     path = os.path.join(get_app_data_dir(), "condarc")
     try:
         if os.path.isfile(path):
-            return path
+            # 旧版写的是清华 TUNA 镜像（该站已停止 anaconda 镜像服务），
+            # 自动替换为浙大镜像；用户手写的其他配置不动
+            with open(path, "r", encoding="utf-8") as f:
+                old = f.read()
+            if "tuna.tsinghua" not in old:
+                return path
         os.makedirs(os.path.dirname(path), exist_ok=True)
         content = (
-            "# TVAS 自动生成 - 清华 TUNA 镜像（国内下载加速）\n"
+            "# TVAS 自动生成 - 浙大 ZJU 镜像（国内下载加速）\n"
             "default_channels:\n"
-            "  - https://mirrors.tuna.tsinghua.edu.cn/anaconda/pkgs/main\n"
-            "  - https://mirrors.tuna.tsinghua.edu.cn/anaconda/pkgs/r\n"
+            "  - https://mirrors.zju.edu.cn/anaconda/pkgs/main\n"
+            "  - https://mirrors.zju.edu.cn/anaconda/pkgs/r\n"
             "custom_channels:\n"
-            "  conda-forge: https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud\n"
-            "  bioconda: https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud\n"
+            "  conda-forge: https://mirrors.zju.edu.cn/anaconda/cloud\n"
+            "  bioconda: https://mirrors.zju.edu.cn/anaconda/cloud\n"
             "show_channel_urls: true\n"
             "# 弱网容忍: 更多重试 + 更长超时，减少下载中途卡死\n"
             "remote_max_retries: 5\n"
@@ -438,10 +443,11 @@ class CondaEnvManager:
 
         installer_path = os.path.join(app_dir, "miniconda_installer.sh")
 
-        # 下载 installer: 清华镜像优先（国内快），官方源兜底
+        # 下载 installer: 浙大镜像优先（国内快），官方源兜底。
+        # 浙大站无 latest 别名文件，需固定具体版本名
         urls = [
-            "https://mirrors.tuna.tsinghua.edu.cn/anaconda/miniconda/"
-            "Miniconda3-latest-Linux-x86_64.sh",
+            "https://mirrors.zju.edu.cn/anaconda/miniconda/"
+            "Miniconda3-py39_25.9.1-3-Linux-x86_64.sh",
             cls.MINICONDA_URL,
         ]
         last_err = None
