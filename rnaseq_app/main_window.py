@@ -42,7 +42,7 @@ from PyQt5.QtWidgets import (
     QPlainTextEdit, QAction, QScrollArea,
     QMenu, QDialog, QComboBox, QTextEdit,
 )
-from PyQt5.QtCore import Qt, QThread, pyqtSlot, pyqtSignal, QUrl
+from PyQt5.QtCore import Qt, QThread, pyqtSlot, pyqtSignal, QUrl, QTimer
 from PyQt5.QtGui import QColor, QTextCursor, QFont, QDesktopServices
 
 from .config import ConfigManager
@@ -471,7 +471,13 @@ class EnvSetupPage(QWidget):
         self._env_worker = None       # 后台任务线程引用（防 GC）
         self._verify_results = []     # 验证结果缓存（后台线程回传）
         self._install_results = []    # 安装结果缓存
+        self._detect_result = (False, "", "")  # 环境检测结果缓存（后台线程回传）
         self._setup_ui()
+        # 启动时自动检测已部署的 Conda 与环境状态（后台执行，不卡界面）。
+        # 此前每次打开都要手动点「检测 Conda」才能识别已建好的环境
+        self.conda_status_label.setText("正在自动检测 Conda 环境...")
+        self.conda_status_label.setStyleSheet(f"color: {COLORS['running']};")
+        QTimer.singleShot(300, self._detect_conda)
 
     # ---- 环境任务后台执行与忙碌状态 ----
 
@@ -527,7 +533,9 @@ class EnvSetupPage(QWidget):
             self.open_term_act, self.refresh_ver_act,
         ):
             w.setEnabled(ready)
-        # 查看安装日志始终可用（不依赖环境状态）
+        # 检测/查看日志始终可用（不依赖环境状态）
+        # （detect_btn 在 _set_env_busy 忙碌时被禁用，须在此恢复）
+        self.detect_btn.setEnabled(True)
         self.view_log_act.setEnabled(True)
         self.open_log_dir_act.setEnabled(True)
 
@@ -756,23 +764,47 @@ class EnvSetupPage(QWidget):
         return self.env_manager
 
     def _detect_conda(self):
-        env = self.get_env_manager()
-        ok, info = env.is_conda_installed()
+        """检测 Conda 与环境状态（后台线程执行，界面不卡顿）。
+        启动时自动检测与手动点击「检测 Conda」共用此入口。"""
+        env = self.get_env_manager()  # 主线程读取输入框构造管理器
+        self._set_env_busy(True, "正在检测 Conda")
+
+        def task_fn():
+            ok, info = env.is_conda_installed()
+            state = env.env_state() if ok else ""
+            self._detect_result = (ok, info, state)
+            return True, ""
+
+        self._run_env_task(task_fn, lambda ok, msg: self._apply_conda_status(env))
+
+    def _apply_conda_status(self, env: CondaEnvManager):
+        """根据检测结果更新环境页状态（主线程回调）"""
+        ok, info, state = self._detect_result
 
         if ok:
             self.conda_status_label.setText(f"✓ {info}")
             self.conda_status_label.setStyleSheet(f"color: {COLORS['success']}; font-weight: bold;")
             self.create_env_btn.setEnabled(True)
             self.conda_path_edit.setText(env.conda_exe)
-            state = env.env_state()
+            # 检测成功立即持久化 conda 路径与环境名：
+            # 重启后配置仍在，配合启动自动检测即可直接使用已建环境
+            self.config.set("conda_path", env.conda_exe)
+            self.config.set("conda_env_name", env.env_name)
+            try:
+                self.config.save()
+            except Exception:
+                pass
             if state == "ok":
                 self.conda_status_label.setText(f"✓ {info}  |  环境 '{env.env_name}' 已存在")
                 self.create_env_btn.setText("重建环境")
                 self._env_ready = True
                 self._refresh_env_buttons()
                 # 环境已存在时自动刷新表格版本/状态，
-                # 反映终端手动安装等环境真实变化（静默，不弹窗）
-                self._refresh_versions_from_env(silent=True)
+                # 反映终端手动安装等环境真实变化（静默，不弹窗）。
+                # QTimer 推迟到下一事件循环再启动新后台任务，
+                # 避免当前 worker 引用被覆盖导致线程被 GC
+                QTimer.singleShot(
+                    0, lambda: self._refresh_versions_from_env(silent=True))
             elif state == "broken":
                 # 目录存在但缺 conda-meta：所有 conda install 都会失败
                 self.conda_status_label.setText(
@@ -2612,6 +2644,27 @@ class MainWindow(QMainWindow):
         # 从配置文件恢复工作目录
         if self.config.work_dir:
             self.param_page.work_dir_edit.setText(self.config.work_dir)
+
+    def closeEvent(self, event):
+        """关闭窗口时自动持久化配置（conda 路径/环境名/参数/工作目录），
+        下次启动直接恢复，无需重新检测创建环境"""
+        try:
+            env_page = self.env_page
+            self.config.set(
+                "conda_env_name",
+                env_page.env_name_edit.text().strip() or "rna2unigene_condaenv")
+            conda_path = env_page.conda_path_edit.text().strip()
+            self.config.set("conda_path", conda_path)
+            self.config.set("species_prefix", self.param_page.get_species_prefix())
+            self.config.set("gene_prefix", self.param_page.get_gene_prefix())
+            self.config.set("default_threads", self.param_page.get_threads())
+            work = self.param_page.get_work_dir()
+            if work:
+                self.config.set("work_dir", work)
+            self.config.save()
+        except Exception:
+            pass  # 配置保存失败不阻塞退出
+        super().closeEvent(event)
 
     def _show_about(self):
         QMessageBox.about(
