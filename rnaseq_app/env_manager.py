@@ -64,11 +64,48 @@ def get_local_envs_dir() -> str:
 # 非交互运行（如本程序）时 conda 无法弹窗确认会报
 # CondaToSNonInteractiveError，因此注入环境变量自动接受。
 
+def _ensure_condarc() -> str:
+    """生成应用专属 condarc（清华 TUNA 国内镜像），返回文件路径。
+
+    bioconda/conda-forge 官方服务器在国外，国内直连经常下载中途
+    卡死或报 HTTP 超时。通过 CONDARC 环境变量让本程序启动的所有
+    conda 子进程走镜像；不影响用户终端里的 conda（~/.condarc 原样）。
+    已存在的配置不覆盖（保留用户手动调整）；写入失败返回空串退回默认。
+    """
+    path = os.path.join(get_app_data_dir(), "condarc")
+    try:
+        if os.path.isfile(path):
+            return path
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        content = (
+            "# TVAS 自动生成 - 清华 TUNA 镜像（国内下载加速）\n"
+            "default_channels:\n"
+            "  - https://mirrors.tuna.tsinghua.edu.cn/anaconda/pkgs/main\n"
+            "  - https://mirrors.tuna.tsinghua.edu.cn/anaconda/pkgs/r\n"
+            "custom_channels:\n"
+            "  conda-forge: https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud\n"
+            "  bioconda: https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud\n"
+            "show_channel_urls: true\n"
+            "# 弱网容忍: 更多重试 + 更长超时，减少下载中途卡死\n"
+            "remote_max_retries: 5\n"
+            "remote_connect_timeout_secs: 30\n"
+            "remote_read_timeout_secs: 180\n"
+        )
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(content)
+        return path
+    except Exception:
+        return ""
+
+
 def _conda_env() -> dict:
-    """构造 conda 子进程环境变量（自动接受 ToS）"""
+    """构造 conda 子进程环境变量（自动接受 ToS + 国内镜像加速）"""
     env = dict(os.environ)
     env["CONDA_PLUGINS_AUTO_ACCEPT_TOS"] = "true"
     env.setdefault("CONDA_AUTO_UPDATE_CONDA", "false")
+    condarc = _ensure_condarc()
+    if condarc:
+        env["CONDARC"] = condarc
     return env
 
 
@@ -401,14 +438,26 @@ class CondaEnvManager:
 
         installer_path = os.path.join(app_dir, "miniconda_installer.sh")
 
-        # 下载 installer
-        if progress_callback:
-            progress_callback("正在下载 Miniconda (~100MB)...")
-
-        try:
-            _download_file(cls.MINICONDA_URL, installer_path)
-        except Exception as e:
-            return False, f"下载 Miniconda 失败: {e}\n请检查网络连接"
+        # 下载 installer: 清华镜像优先（国内快），官方源兜底
+        urls = [
+            "https://mirrors.tuna.tsinghua.edu.cn/anaconda/miniconda/"
+            "Miniconda3-latest-Linux-x86_64.sh",
+            cls.MINICONDA_URL,
+        ]
+        last_err = None
+        downloaded = False
+        for url in urls:
+            if progress_callback:
+                host = url.split("/")[2]
+                progress_callback(f"正在下载 Miniconda (~100MB, {host})...")
+            try:
+                _download_file(url, installer_path)
+                downloaded = True
+                break
+            except Exception as e:
+                last_err = e
+        if not downloaded:
+            return False, f"下载 Miniconda 失败: {last_err}\n请检查网络连接"
 
         # 静默安装
         if progress_callback:
@@ -719,10 +768,13 @@ class CondaEnvManager:
                 "未找到该软件包/版本。\n"
                 "建议: 去掉版本号安装最新版, 或用 conda search <包名> 查看可用版本。"
             )
-        if "connect" in err or "timeout" in err or "proxy" in err or "ssl" in err:
+        if ("connect" in err or "timeout" in err or "超时" in err
+                or "proxy" in err or "ssl" in err or "condahttperror" in err):
             return (
-                "网络连接问题。\n"
-                "建议: 检查网络/代理设置, 或配置国内镜像源后重试。"
+                "网络连接问题（bioconda 官方源在国外，直连易超时/卡死）。\n"
+                "本程序已自动配置清华 TUNA 国内镜像，通常直接重试即可成功。\n"
+                "若仍反复失败: ① 更换网络环境（如手机热点）后重试\n"
+                "             ② 或稍后再试（镜像站高峰期偶发限流）"
             )
         if "disk" in err or "no space" in err:
             return "磁盘空间不足。\n建议: 清理磁盘后重试 (可用 df -h 查看)。"
@@ -852,12 +904,34 @@ class CondaEnvManager:
 # 辅助: 文件下载
 # ============================================================
 
-def _download_file(url: str, dest: str, timeout: int = 600):
-    """下载文件（带进度）"""
+def _download_file(url: str, dest: str, timeout: int = 300, retries: int = 3):
+    """下载文件: 分块写入 + 失败自动重试（间隔递增）。
+
+    官方源在国内弱网下经常中途断开；重试前删除残缺文件，
+    避免半截 installer 被后续安装步骤误用。
+    """
     import ssl
+    import time
     ctx = ssl.create_default_context()
-    req = urllib.request.Request(url, headers={"User-Agent": "TVAS/1.0"})
-    with urllib.request.urlopen(req, context=ctx, timeout=timeout) as resp:
-        with open(dest, "wb") as f:
-            f.write(resp.read())
-    os.chmod(dest, os.stat(dest).st_mode | stat.S_IEXEC)
+    last_err = None
+    for attempt in range(1, retries + 1):
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "TVAS/1.0"})
+            with urllib.request.urlopen(req, context=ctx, timeout=timeout) as resp:
+                with open(dest, "wb") as f:
+                    while True:
+                        chunk = resp.read(1 << 20)  # 1MB 分块
+                        if not chunk:
+                            break
+                        f.write(chunk)
+            os.chmod(dest, os.stat(dest).st_mode | stat.S_IEXEC)
+            return
+        except Exception as e:
+            last_err = e
+            try:
+                os.remove(dest)  # 清掉残缺文件再重试
+            except OSError:
+                pass
+            if attempt < retries:
+                time.sleep(3 * attempt)
+    raise RuntimeError(f"{last_err} (已重试 {retries} 次)")
