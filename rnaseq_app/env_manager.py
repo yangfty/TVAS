@@ -769,6 +769,20 @@ class CondaEnvManager:
                 "建议: 在「环境设置」页点击「创建环境」自动清理残缺目录并重建，"
                 "重建后再安装软件包。"
             )
+        if "post-link script failed" in err or "linkerror" in err:
+            return (
+                "软件包的 post-link 安装脚本执行失败。\n"
+                "最常见原因: bioconductor 数据包（如 go.db，trinity 依赖）需在安装时\n"
+                "从 bioconductor.org 下载注释数据，国内直连极慢且易断流。\n"
+                "本版本已自动改为国内镜像预下载，请直接重试；若仍失败请查看\n"
+                "「更多操作 → 查看安装日志」中的 [bioc] 段落定位。"
+            )
+        if "unsupported format character" in err or "<exception str() failed>" in err:
+            return (
+                "conda 渲染错误信息时自身崩溃（新版 conda 的已知问题），\n"
+                "真实错误被掩盖。请在安装日志中查找 LinkError / post-link 段落，\n"
+                "或直接重试（多数为下载中断类瞬时错误）。"
+            )
         if "packagesnotfound" in err:
             return (
                 "未找到该软件包/版本。\n"
@@ -789,6 +803,14 @@ class CondaEnvManager:
         return ""
 
     def install_package(self, pkg: PackageSpec) -> Tuple[bool, str]:
+        # trinity 依赖链含 bioconductor 数据包(go.db 等), 其 conda 包
+        # 不含数据本体, 安装时需从 bioconductor.org 现场下载(国内直连
+        # 必失败) → 预下载到本地 + 给 post-link 脚本打缓存直装补丁
+        if pkg.name == "trinity":
+            self._log_write("    [bioc] 准备 bioconductor 数据包(国内镜像预下载)...")
+            self._prepare_bioc_data(
+                f"{pkg.name}={pkg.version}" if pkg.version else pkg.name)
+
         cmd = [self._conda_exe, "install", "-n", self.env_name, "-y"]
         cmd.extend(["-c", pkg.channel])
         # bioconda 官方建议所有安装都同时挂 conda-forge：
@@ -825,6 +847,186 @@ class CondaEnvManager:
         self._log_pkg_result(pkg.name, cmd, rc, out, err, False, msg)
         return False, msg
 
+    # ---- bioconductor 数据包预下载（trinity 依赖国内网络优化） ----
+
+    _BIOC_PATCH_MARKER = "TVAS_BIOC_PATCH_V1"
+
+    # installBiocDataPackage.sh 补丁: 命中预下载缓存(md5正确)则直接安装。
+    # 背景: 原脚本 set -e + 第一个 curl 失败即中止, json 里的备用镜像
+    # (galaxy 系, 国内快)永远轮不到; 命中缓存则完全跳过下载环节
+    _BIOC_PATCH_SCRIPT = r'''
+# --- TVAS_BIOC_PATCH_V1: 命中预下载缓存则跳过慢速下载（国内网络优化） ---
+if [ -n "${1:-}" ]; then
+  _tvas_json="$(dirname -- "${BASH_SOURCE[0]}")/../share/bioconductor-data-packages/dataURLs.json"
+  if [ -f "$_tvas_json" ]; then
+    _tvas_fn="$(yq ".\"$1\".fn" "$_tvas_json" 2>/dev/null | tr -d '"')"
+    _tvas_md5="$(yq ".\"$1\".md5" "$_tvas_json" 2>/dev/null | tr -d '"')"
+    _tvas_tar="$PREFIX/share/$1/$_tvas_fn"
+    if [ -n "$_tvas_fn" ] && [ "$_tvas_fn" != "null" ] && [ -f "$_tvas_tar" ] \
+       && echo "$_tvas_md5  $_tvas_tar" | md5sum -c --status 2>/dev/null; then
+      echo "TVAS: 使用预下载缓存: $_tvas_tar"
+      if R CMD INSTALL --library="$PREFIX/lib/R/library" "$_tvas_tar"; then
+        _tvas_rc=0
+      else
+        _tvas_rc=$?
+      fi
+      rm -f "$_tvas_tar"
+      rmdir "$(dirname -- "$_tvas_tar")" 2>/dev/null
+      exit $_tvas_rc
+    fi
+  fi
+fi
+# --- END TVAS_BIOC_PATCH_V1 ---
+'''
+
+    @staticmethod
+    def _sort_bioc_urls(urls: List[str]) -> List[str]:
+        """按国内实测速度排序下载源。
+
+        depot.galaxyproject.org ~440KB/s（最快）；bioconductor.org
+        国内直连仅 16~50KB/s 且极易断流（置底兜底）；
+        bioarchive.galaxyproject.org 部分文件已 404（次选）。
+        """
+        def rank(u: str) -> int:
+            if "depot.galaxyproject" in u:
+                return 0
+            if "bioarchive.galaxyproject" in u:
+                return 1
+            if "bioconductor.org" in u:
+                return 3
+            return 2
+        return sorted(urls, key=rank)
+
+    def _patch_bioc_postlink(self, env_dir: str) -> str:
+        """给 installBiocDataPackage.sh 打缓存直装补丁。
+
+        幂等: 已打过(marker 存在)则跳过; 首次备份为 .TVAS_orig;
+        conda 重装 bioconductor-data-packages 后脚本被还原,
+        下次安装会自动重打(按 marker 判断)。
+        返回描述文本（失败返回空串, 不影响正常安装流程）。
+        """
+        script = os.path.join(env_dir, "bin", "installBiocDataPackage.sh")
+        if not os.path.isfile(script):
+            return ""
+        try:
+            with open(script, "r", encoding="utf-8") as f:
+                content = f.read()
+            if self._BIOC_PATCH_MARKER in content:
+                return "post-link 缓存补丁已存在"
+            lines = content.splitlines(keepends=True)
+            insert_at = 1 if lines and lines[0].startswith("#!") else 0
+            patched = "".join(lines[:insert_at]) + self._BIOC_PATCH_SCRIPT + "".join(lines[insert_at:])
+            try:
+                shutil.copy2(script, script + ".TVAS_orig")  # 备份原始脚本
+            except OSError:
+                pass
+            with open(script, "w", encoding="utf-8") as f:
+                f.write(patched)
+            os.chmod(script, os.stat(script).st_mode | stat.S_IEXEC)
+            return "post-link 缓存补丁已应用"
+        except Exception:
+            return ""
+
+    def _prepare_bioc_data(self, spec: str) -> None:
+        """trinity/bioconductor 安装前置准备: 预下载数据包 + 打补丁。
+
+        背景: bioconductor 数据包(如 go.db, trinity 依赖)的 conda 包
+        不含数据本体, 安装时由 post-link 脚本从 bioconductor.org 现场
+        下载(数~数十MB)。国内直连仅 16~50KB/s 且断流, 原脚本 set -e
+        使首个 curl 一断整个安装即失败。
+        对策: ① dry-run 解析依赖中的数据包清单 ② 按镜像速度排序、
+        断点续传地预下载到 staging 目录(md5 校验) ③ 修补 post-link
+        脚本, 安装时命中缓存直接 R CMD INSTALL。
+        """
+        import hashlib
+
+        env_dir = self.get_env_path()
+        if not env_dir:
+            return
+
+        json_path = os.path.join(
+            env_dir, "share", "bioconductor-data-packages", "dataURLs.json")
+        if not os.path.isfile(json_path):
+            # 先单独安装 bioconductor-data-packages（纯脚本+索引, 无数据下载）
+            self._log_write("    [bioc] 预装 bioconductor-data-packages（提供下载索引）...")
+            cmd = [self._conda_exe, "install", "-n", self.env_name, "-y",
+                   "-c", "bioconda", "-c", "conda-forge", "bioconductor-data-packages"]
+            self._exec(cmd, 900)
+            if not os.path.isfile(json_path):
+                self._log_write("    [bioc] ✗ 预装失败, 跳过数据预下载（回退原下载流程）")
+                return
+
+        # 1) 给 post-link 脚本打缓存直装补丁
+        note = self._patch_bioc_postlink(env_dir)
+        if note:
+            self._log_write(f"    [bioc] {note}")
+
+        # 2) dry-run 解析依赖中的 bioconductor 数据包
+        try:
+            cmd = [self._conda_exe, "install", "-n", self.env_name, "--dry-run",
+                   "--json", "-q", "-c", "bioconda", "-c", "conda-forge", spec]
+            rc, out, _ = self._exec(cmd, 600)
+            plan = json.loads(out)
+            links = (plan.get("actions") or {}).get("LINK", [])
+        except Exception as e:
+            self._log_write(f"    [bioc] dry-run 解析失败: {e}，跳过数据预下载")
+            return
+
+        # 3) 索引: key 形如 "go.db-3.22.0"
+        try:
+            with open(json_path, "r", encoding="utf-8") as f:
+                bioc_index = json.load(f)
+        except Exception:
+            bioc_index = {}
+
+        for link in links:
+            s = str(link).split("::")[-1]  # 兼容 "channel::name-ver-build"
+            if not s.startswith("bioconductor-"):
+                continue
+            body, _, _build = s.rpartition("-")
+            name, _, ver = body.rpartition("-")
+            key = f"{name[len('bioconductor-'):]}-{ver}"
+            meta = bioc_index.get(key)
+            if not meta:
+                continue  # 普通软件包（非数据包）
+            fn = meta.get("fn", "")
+            md5 = meta.get("md5", "")
+            staging = os.path.join(env_dir, "share", key)
+            tar = os.path.join(staging, fn)
+            os.makedirs(staging, exist_ok=True)
+
+            # md5 已正确 → 已缓存, 跳过
+            if os.path.isfile(tar) and self._md5_of(tar) == md5:
+                self._log_write(f"    [bioc] 缓存有效: {key}")
+                continue
+
+            ok = False
+            for url in self._sort_bioc_urls(meta.get("urls", [])):
+                host = url.split("/")[2]
+                try:
+                    self._log_write(f"    [bioc] 预下载 {fn} ← {host}")
+                    _download_file(url, tar, timeout=120, retries=5, resume=True)
+                    if self._md5_of(tar) == md5:
+                        ok = True
+                        break
+                    os.remove(tar)  # 镜像内容不符, 换下一个源重下
+                except Exception as e:
+                    self._log_write(f"    [bioc] {host} 下载失败: {e}")
+                    continue
+            if ok:
+                self._log_write(f"    [bioc] ✓ {key} 预下载完成")
+            else:
+                self._log_write(f"    [bioc] ✗ {key} 预下载失败（将回退原下载流程）")
+
+    @staticmethod
+    def _md5_of(path: str) -> str:
+        import hashlib
+        h = hashlib.md5()
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(1 << 20), b""):
+                h.update(chunk)
+        return h.hexdigest()
+
     def install_custom_package(self, spec: str) -> Tuple[bool, str]:
         """
         安装用户自定义的软件包。
@@ -837,6 +1039,10 @@ class CondaEnvManager:
 
         # 提取纯包名（去掉版本约束）
         base_name = spec.split("=")[0].split(">")[0].split("<")[0].strip()
+
+        # trinity / bioconductor-* 系列需要同样的数据包预下载准备
+        if base_name.lower() == "trinity" or base_name.lower().startswith("bioconductor-"):
+            self._prepare_bioc_data(spec)
 
         # 自动补齐 channels（bioconda + conda-forge）
         cmd = [self._conda_exe, "install", "-n", self.env_name, "-y",
@@ -910,11 +1116,14 @@ class CondaEnvManager:
 # 辅助: 文件下载
 # ============================================================
 
-def _download_file(url: str, dest: str, timeout: int = 300, retries: int = 3):
+def _download_file(url: str, dest: str, timeout: int = 300, retries: int = 3,
+                   resume: bool = False):
     """下载文件: 分块写入 + 失败自动重试（间隔递增）。
 
-    官方源在国内弱网下经常中途断开；重试前删除残缺文件，
-    避免半截 installer 被后续安装步骤误用。
+    resume=True 时支持断点续传: 目标文件已存在的部分通过 Range 请求
+    续接（服务器不支持续传返回 200 时自动重头下载，已下载部分保留，
+    断流后下一次重试继续接上）。适用于大文件 + 弱网。
+    普通模式（默认）重试前删除残缺文件，避免半截 installer 被误用。
     """
     import ssl
     import time
@@ -922,9 +1131,17 @@ def _download_file(url: str, dest: str, timeout: int = 300, retries: int = 3):
     last_err = None
     for attempt in range(1, retries + 1):
         try:
-            req = urllib.request.Request(url, headers={"User-Agent": "TVAS/1.0"})
+            headers = {"User-Agent": "TVAS/1.0"}
+            mode = "wb"
+            if resume and os.path.isfile(dest) and os.path.getsize(dest) > 0:
+                headers["Range"] = f"bytes={os.path.getsize(dest)}-"
+                mode = "ab"
+            req = urllib.request.Request(url, headers=headers)
             with urllib.request.urlopen(req, context=ctx, timeout=timeout) as resp:
-                with open(dest, "wb") as f:
+                # 服务器不支持续传（返回 200 而非 206）→ 重头下载
+                if mode == "ab" and resp.getcode() == 200:
+                    mode = "wb"
+                with open(dest, mode) as f:
                     while True:
                         chunk = resp.read(1 << 20)  # 1MB 分块
                         if not chunk:
@@ -934,10 +1151,12 @@ def _download_file(url: str, dest: str, timeout: int = 300, retries: int = 3):
             return
         except Exception as e:
             last_err = e
-            try:
-                os.remove(dest)  # 清掉残缺文件再重试
-            except OSError:
-                pass
+            if not resume:
+                try:
+                    os.remove(dest)  # 清掉残缺文件再重试
+                except OSError:
+                    pass
+            # resume 模式保留已下载部分，下次断点续传
             if attempt < retries:
                 time.sleep(3 * attempt)
     raise RuntimeError(f"{last_err} (已重试 {retries} 次)")
